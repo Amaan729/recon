@@ -1,6 +1,7 @@
 """FastAPI entry point for the Recon agent service."""
 
 import os
+import db
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -51,17 +52,20 @@ async def agent_stream(websocket: WebSocket):
 
 @app.post("/jobs/approve/{job_id}")
 async def jobs_approve(job_id: str):
-    return {"status": "ok"}
+    await db.update_job_status(job_id, "approved")
+    return {"status": "ok", "job_id": job_id}
 
 
 @app.post("/jobs/skip/{job_id}")
 async def jobs_skip(job_id: str):
-    return {"status": "ok"}
+    await db.update_job_status(job_id, "skipped")
+    return {"status": "ok", "job_id": job_id}
 
 
 @app.get("/jobs/queue")
 async def jobs_queue():
-    return {"status": "ok"}
+    jobs = await db.get_pending_jobs()
+    return {"jobs": jobs}
 
 
 # ── LinkedIn outreach ────────────────────────────────────────────────────────

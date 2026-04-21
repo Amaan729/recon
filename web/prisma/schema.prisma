@@ -149,3 +149,68 @@ model ScheduledJob {
   status    String   @default("pending")
   createdAt DateTime @default(now())
 }
+
+// ─── Recon ───────────────────────────────────────────────────────────────────
+
+model Job {
+  id            String       @id @default(cuid())
+  title         String
+  company       String
+  location      String?
+  jobBoardUrl   String
+  source        String
+  // linkedin | greenhouse | lever | ashby | workday | handshake | simplify | instagram
+  status        String       @default("pending")
+  // pending | approved | skipped | applied | failed
+  isTopPriority Boolean      @default(false)
+  jdText        String?
+  matchScore    Int?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  application   Application?
+}
+
+model Application {
+  id                String              @id @default(cuid())
+  jobId             String              @unique
+  job               Job                 @relation(fields: [jobId], references: [id])
+  status            String              @default("pending_review")
+  // submitted | failed | pending_review
+  portalEmail       String?
+  resumeVersion     String?
+  coverLetter       String?
+  submittedAt       DateTime?
+  createdAt         DateTime            @default(now())
+  recruiterOutreach RecruiterOutreach[]
+}
+
+model Recruiter {
+  id             String              @id @default(cuid())
+  name           String
+  title          String?
+  company        String
+  linkedinUrl    String              @unique
+  email          String?
+  emailSource    String?
+  // apollo | hunter | both
+  relevanceScore Int?
+  contactedAt    DateTime?
+  linkedinSentAt DateTime?
+  createdAt      DateTime            @default(now())
+  outreach       RecruiterOutreach[]
+}
+
+model RecruiterOutreach {
+  id            String       @id @default(cuid())
+  recruiterId   String
+  recruiter     Recruiter    @relation(fields: [recruiterId], references: [id])
+  applicationId String?
+  application   Application? @relation(fields: [applicationId], references: [id])
+  channel       String
+  // linkedin_connection | linkedin_inmail | linkedin_dm | email
+  status        String       @default("queued")
+  // queued | approved | sent | failed
+  messageText   String?
+  sentAt        DateTime?
+  createdAt     DateTime     @default(now())
+}
