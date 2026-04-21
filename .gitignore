@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Build outputs
+.next/
+out/
+dist/
+build/
+
+# Environment variables — never commit real values
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+agent/.env
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+web/dev.db
+web/prisma/dev.db
+
+# Prisma generated client
+web/node_modules/.prisma/
+
+# AI / browser-use artifacts
+agent/screenshots/
+agent/resumes/*.pdf
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

@@ -1,0 +1,151 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ─── NextAuth ────────────────────────────────────────────────────────────────
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── App ─────────────────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  extensionKey  String?   @unique // API key for Chrome extension
+  accounts      Account[]
+  sessions      Session[]
+  contacts      Contact[]
+  emails        Email[]
+  resumes       Resume[]
+}
+
+model Contact {
+  id        String   @id @default(cuid())
+  userId    String
+  email     String
+  name      String?
+  company   String?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emails    Email[]
+
+  @@unique([userId, email])
+}
+
+model Resume {
+  id        String       @id @default(cuid())
+  userId    String
+  name      String       // e.g. "SWE Resume v2"
+  filename  String       // stored filename on disk
+  isDefault Boolean      @default(false)
+  createdAt DateTime     @default(now())
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emails    Email[]
+  opens     ResumeOpen[]
+}
+
+model Email {
+  id             String      @id @default(cuid())
+  userId         String
+  contactId      String?
+  resumeId       String?
+  gmailId        String?
+  trackingId     String      @unique @default(cuid())
+  toEmail        String?     // raw recipient address (denormalised for display)
+  subject        String
+  body           String
+  status         String      @default("pending") // pending | sent | failed
+  senderIp       String?     // to detect self-opens
+  openedAt       DateTime?   // first non-self open
+  openCount      Int         @default(0)
+  scheduledAt    DateTime?
+  sentAt         DateTime?
+  // Follow-up
+  followUpMode   String?     // auto | manual | none
+  followUpDays   Int?        // send after X days (auto mode)
+  followUpSent   Boolean     @default(false)
+  followUpSentAt DateTime?
+  isFollowUp     Boolean     @default(false)   // true if this IS a follow-up
+  parentEmailId  String?                        // original email this follows up on
+  createdAt      DateTime    @default(now())
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contact        Contact?    @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  resume         Resume?     @relation(fields: [resumeId], references: [id])
+  opens          EmailOpen[]
+}
+
+model EmailOpen {
+  id        String   @id @default(cuid())
+  emailId   String
+  ip        String?
+  city      String?
+  region    String?
+  country   String?
+  device    String?  // mobile | desktop | tablet
+  os        String?  // iOS | macOS | Windows | Android | Linux
+  browser   String?
+  isSelf    Boolean  @default(false)
+  openedAt  DateTime @default(now())
+  email     Email    @relation(fields: [emailId], references: [id], onDelete: Cascade)
+}
+
+model ResumeOpen {
+  id        String   @id @default(cuid())
+  resumeId  String
+  emailId   String?
+  ip        String?
+  city      String?
+  country   String?
+  device    String?
+  isSelf    Boolean  @default(false)
+  openedAt  DateTime @default(now())
+  resume    Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+}
+
+model ScheduledJob {
+  id        String   @id @default(cuid())
+  type      String
+  payload   String
+  runAt     DateTime
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+}

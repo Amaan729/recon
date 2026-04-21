@@ -1,0 +1,61 @@
+// New Prisma models for the Recon job-hunting agent.
+// These extend the existing MailSuite Pro schema in web/prisma/schema.prisma.
+// Do NOT duplicate existing models: Account, Session, VerificationToken,
+// User, Contact, Resume, Email, EmailOpen, ResumeOpen, ScheduledJob.
+
+model Job {
+  id            String   @id @default(cuid())
+  title         String
+  company       String
+  location      String?
+  jobBoardUrl   String
+  source        String   // linkedin | greenhouse | lever | ashby | workday | handshake | simplify | instagram
+  status        String   // pending | approved | skipped | applied | failed
+  isTopPriority Boolean  @default(false) // true for Instagram/zero2sudo referrals
+  jdText        String?  // full job description text
+  matchScore    Int?     // 0-100 AI match score
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  application   Application?
+}
+
+model Application {
+  id                String              @id @default(cuid())
+  jobId             String              @unique
+  job               Job                 @relation(fields: [jobId], references: [id])
+  status            String              // submitted | failed | pending_review
+  portalEmail       String?
+  resumeVersion     String?             // path to tailored .tex file
+  coverLetter       String?
+  submittedAt       DateTime?
+  createdAt         DateTime            @default(now())
+  recruiterOutreach RecruiterOutreach[]
+}
+
+model Recruiter {
+  id             String              @id @default(cuid())
+  name           String
+  title          String?
+  company        String
+  linkedinUrl    String              @unique
+  email          String?
+  emailSource    String?             // apollo | hunter | both
+  relevanceScore Int?
+  contactedAt    DateTime?
+  linkedinSentAt DateTime?
+  createdAt      DateTime            @default(now())
+  outreach       RecruiterOutreach[]
+}
+
+model RecruiterOutreach {
+  id            String       @id @default(cuid())
+  recruiterId   String
+  recruiter     Recruiter    @relation(fields: [recruiterId], references: [id])
+  applicationId String?
+  application   Application? @relation(fields: [applicationId], references: [id])
+  channel       String       // linkedin_connection | linkedin_inmail | linkedin_dm | email
+  status        String       // queued | approved | sent | failed
+  messageText   String?
+  sentAt        DateTime?
+  createdAt     DateTime     @default(now())
+}
