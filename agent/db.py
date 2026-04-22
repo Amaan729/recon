@@ -171,6 +171,24 @@ async def get_approved_jobs() -> list[dict]:
             for row in result.rows]
 
 
+async def get_recruiters_for_company(company: str) -> list[dict]:
+    """Return all recruiters for a company ordered by relevance score DESC."""
+    client = get_client()
+    result = await client.execute(
+        """
+        SELECT id, name, title, company, linkedinUrl, email,
+               emailSource, relevanceScore, contactedAt,
+               linkedinSentAt, createdAt
+        FROM Recruiter
+        WHERE LOWER(company) LIKE LOWER(?)
+        ORDER BY relevanceScore DESC
+        """,
+        [f"%{company}%"],
+    )
+    return [dict(zip([c.name for c in result.columns], row))
+            for row in result.rows]
+
+
 def _cuid() -> str:
     """Generate a cuid-compatible unique ID using Python."""
     import time

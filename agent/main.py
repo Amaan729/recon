@@ -6,6 +6,7 @@ from fastapi import FastAPI, WebSocket
 from browser.application_agent import run_application_batch
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from outreach.recruiter_scraper import find_and_store_recruiters
 
 load_dotenv()
 
@@ -89,6 +90,27 @@ async def run_batch():
             for r in results
         ],
     }
+
+
+# ── Recruiter search ─────────────────────────────────────────────────────────
+
+@app.post("/recruiters/find/{company}")
+async def find_recruiters(company: str):
+    """Trigger recruiter search for a company. Called after approving a job."""
+    recruiter_ids = await find_and_store_recruiters(company)
+    return {
+        "status": "ok",
+        "company": company,
+        "recruiters_found": len(recruiter_ids),
+        "recruiter_ids": recruiter_ids,
+    }
+
+
+@app.get("/recruiters/{company}")
+async def get_recruiters(company: str):
+    """Get all stored recruiters for a company."""
+    recruiters = await db.get_recruiters_for_company(company)
+    return {"status": "ok", "recruiters": recruiters}
 
 
 # ── LinkedIn outreach ────────────────────────────────────────────────────────
