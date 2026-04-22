@@ -171,6 +171,32 @@ async def get_approved_jobs() -> list[dict]:
             for row in result.rows]
 
 
+async def get_queued_linkedin_outreach() -> list[dict]:
+    """Return all queued LinkedIn outreach items joined with recruiter info,
+    ordered by createdAt ASC."""
+    client = get_client()
+    result = await client.execute(
+        """
+        SELECT
+            ro.id, ro.recruiterId, ro.channel, ro.messageText,
+            ro.createdAt, ro.applicationId,
+            r.name  AS recruiterName,
+            r.company,
+            r.linkedinUrl,
+            r.title AS recruiterTitle
+        FROM RecruiterOutreach ro
+        JOIN Recruiter r ON ro.recruiterId = r.id
+        WHERE ro.channel IN (
+            'linkedin_connection','linkedin_inmail','linkedin_dm'
+        )
+          AND ro.status = 'queued'
+        ORDER BY ro.createdAt ASC
+        """
+    )
+    return [dict(zip([c.name for c in result.columns], row))
+            for row in result.rows]
+
+
 async def get_recruiters_for_company(company: str) -> list[dict]:
     """Return all recruiters for a company ordered by relevance score DESC."""
     client = get_client()

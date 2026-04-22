@@ -7,6 +7,8 @@ from browser.application_agent import run_application_batch
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from outreach.recruiter_scraper import find_and_store_recruiters
+from outreach.email_sender import send_recruiter_email
+from outreach.linkedin_queue import queue_connection_request, queue_inmail
 
 load_dotenv()
 
@@ -113,7 +115,63 @@ async def get_recruiters(company: str):
     return {"status": "ok", "recruiters": recruiters}
 
 
-# ── LinkedIn outreach ────────────────────────────────────────────────────────
+# ── Outreach sequencer ───────────────────────────────────────────────────────
+
+@app.post("/outreach/email/{recruiter_id}")
+async def send_email_outreach(recruiter_id: str, body: dict):
+    """Send email to a recruiter. Body: { company, role, resume_pdf_path,
+    application_id? }"""
+    recruiters = await db.get_recruiters_for_company(body.get("company", ""))
+    recruiter = next((r for r in recruiters if r["id"] == recruiter_id), None)
+    if not recruiter or not recruiter.get("email"):
+        return {"status": "error", "message": "Recruiter or email not found"}
+
+    success = await send_recruiter_email(
+        recruiter_id=recruiter_id,
+        recruiter_name=recruiter["name"],
+        recruiter_email=recruiter["email"],
+        company=recruiter["company"],
+        role=body.get("role", "Software Engineering Intern"),
+        resume_pdf_path=body.get("resume_pdf_path", ""),
+        application_id=body.get("application_id"),
+    )
+    return {"status": "ok" if success else "error", "sent": success}
+
+
+@app.post("/outreach/linkedin/queue/{recruiter_id}")
+async def queue_linkedin_outreach(recruiter_id: str, body: dict):
+    """Queue a LinkedIn connection request. Body: { company, role,
+    recruiter_name, application_id? }"""
+    outreach_id = await queue_connection_request(
+        recruiter_id=recruiter_id,
+        recruiter_name=body.get("recruiter_name", ""),
+        company=body.get("company", ""),
+        role=body.get("role", "Software Engineering Intern"),
+        application_id=body.get("application_id"),
+    )
+    return {"status": "ok", "outreach_id": outreach_id}
+
+
+@app.get("/outreach/queued")
+async def get_queued_outreach():
+    """Get all LinkedIn outreach items waiting for user approval."""
+    queued = await db.get_queued_linkedin_outreach()
+    return {"status": "ok", "items": queued}
+
+
+@app.post("/outreach/send/{outreach_id}")
+async def send_queued_outreach(outreach_id: str):
+    """Mark a queued LinkedIn outreach as approved. Actual send happens via
+    browser-use in a separate process."""
+    client = db.get_client()
+    await client.execute(
+        "UPDATE RecruiterOutreach SET status='approved' WHERE id=?",
+        [outreach_id],
+    )
+    return {"status": "ok", "outreach_id": outreach_id}
+
+
+# ── LinkedIn outreach (legacy stub) ──────────────────────────────────────────
 
 @app.post("/linkedin/approve")
 async def linkedin_approve():
