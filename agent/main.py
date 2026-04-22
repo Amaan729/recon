@@ -3,6 +3,7 @@
 import os
 import db
 from fastapi import FastAPI, WebSocket
+from browser.application_agent import run_application_batch
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
@@ -66,6 +67,28 @@ async def jobs_skip(job_id: str):
 async def jobs_queue():
     jobs = await db.get_pending_jobs()
     return {"jobs": jobs}
+
+
+# ── Application batch ────────────────────────────────────────────────────────
+
+@app.post("/agent/run-batch")
+async def run_batch():
+    """Fetch all approved jobs and run application batch."""
+    approved_jobs = await db.get_approved_jobs()
+    if not approved_jobs:
+        return {"status": "ok", "message": "No approved jobs"}
+    results = await run_application_batch(approved_jobs)
+    applied = sum(1 for r in results if r.success)
+    failed = sum(1 for r in results if not r.success)
+    return {
+        "status": "ok",
+        "applied": applied,
+        "failed": failed,
+        "results": [
+            {"job_id": r.job_id, "status": r.status, "error": r.error}
+            for r in results
+        ],
+    }
 
 
 # ── LinkedIn outreach ────────────────────────────────────────────────────────

@@ -14,3 +14,6 @@ cerebras-cloud-sdk==1.0.0
 mistralai==1.0.0
 apify-client==1.7.0
 boto3==1.34.0
+google-auth==2.29.0
+google-api-python-client==2.130.0
+langchain-google-genai==1.0.7

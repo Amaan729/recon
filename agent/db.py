@@ -154,6 +154,23 @@ async def queue_outreach(
     return out_id
 
 
+async def get_approved_jobs() -> list[dict]:
+    """Return all jobs with status='approved', ordered by
+    isTopPriority DESC then createdAt ASC."""
+    client = get_client()
+    result = await client.execute(
+        """
+        SELECT id, title, company, location, jobBoardUrl,
+               isTopPriority
+        FROM Job
+        WHERE status = 'approved'
+        ORDER BY isTopPriority DESC, createdAt ASC
+        """
+    )
+    return [dict(zip([c.name for c in result.columns], row))
+            for row in result.rows]
+
+
 def _cuid() -> str:
     """Generate a cuid-compatible unique ID using Python."""
     import time
