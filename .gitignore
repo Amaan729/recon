@@ -37,6 +37,9 @@ web/node_modules/.prisma/
 agent/screenshots/
 agent/resumes/*.pdf
 
+# Base resume — add manually after cloning
+agent/resume/base/resume.tex
+
 # macOS
 .DS_Store
 
