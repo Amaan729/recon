@@ -40,6 +40,9 @@ agent/resumes/*.pdf
 # Base resume — add manually after cloning
 agent/resume/base/resume.tex
 
+# Compiled resume versions
+agent/resume/versions/
+
 # macOS
 .DS_Store
 
