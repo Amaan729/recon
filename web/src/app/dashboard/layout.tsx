@@ -6,6 +6,7 @@ const NAV = [
   { href: "/dashboard",          label: "Overview",    icon: "◈" },
   { href: "/dashboard/jobs",         label: "Jobs Queue",   icon: "◫" },
   { href: "/dashboard/applications", label: "Applications", icon: "◑" },
+  { href: "/dashboard/recruiters",   label: "Recruiters",   icon: "◒" },
   { href: "/dashboard/compose",      label: "Compose",      icon: "✦" },
   { href: "/dashboard/tracking", label: "Tracking",    icon: "◉" },
   { href: "/dashboard/resumes",  label: "Resumes",     icon: "◎" },
