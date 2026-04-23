@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "MailSuite Tracker",
+  "name": "Recon — Email Tracker",
   "version": "1.0.0",
-  "description": "Invisible email open tracking for Gmail. No watermarks.",
+  "description": "Email tracking for Recon job hunting agent",
   "permissions": ["storage", "activeTab"],
   "host_permissions": ["https://mail.google.com/*"],
   "background": {

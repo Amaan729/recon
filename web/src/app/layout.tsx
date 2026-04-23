@@ -7,8 +7,20 @@ import { SessionProvider } from "next-auth/react";
 const geist = Geist({ variable: "--font-geist", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "MailSuite Pro",
-  description: "Email tracking, mail merge, scheduling & follow-up sequences",
+  title: "Recon — Job Search Agent",
+  description: "Automated job search and application agent",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Recon",
+  },
+  other: {
+    "mobile-web-app-capable": "yes",
+  },
+  icons: {
+    apple: "/icon-192.png",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
