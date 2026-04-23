@@ -10,7 +10,8 @@ const NAV = [
   { href: "/dashboard/recruiters",   label: "Recruiters",   icon: "◒" },
   { href: "/dashboard/compose",      label: "Compose",      icon: "✦" },
   { href: "/dashboard/tracking", label: "Tracking",    icon: "◉" },
-  { href: "/dashboard/resumes",  label: "Resumes",     icon: "◎" },
+  { href: "/dashboard/resume",   label: "Resume Mgr",  icon: "◎" },
+  { href: "/dashboard/resumes",  label: "Resumes",     icon: "◈" },
   { href: "/dashboard/contacts", label: "Contacts",    icon: "◌" },
   { href: "/dashboard/settings", label: "Settings",    icon: "◧" },
 ];
