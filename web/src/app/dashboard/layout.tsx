@@ -4,6 +4,7 @@ import Link from "next/link";
 
 const NAV = [
   { href: "/dashboard",          label: "Overview",    icon: "◈" },
+  { href: "/dashboard/agent",        label: "Agent",        icon: "⬡" },
   { href: "/dashboard/jobs",         label: "Jobs Queue",   icon: "◫" },
   { href: "/dashboard/applications", label: "Applications", icon: "◑" },
   { href: "/dashboard/recruiters",   label: "Recruiters",   icon: "◒" },

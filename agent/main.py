@@ -1,8 +1,10 @@
 """FastAPI entry point for the Recon agent service."""
 
+import asyncio
+import base64
 import os
 import db
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from browser.application_agent import run_application_batch
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -27,29 +29,111 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Agent state
+_agent_status = "idle"   # idle | running | error
+_active_websockets: list[WebSocket] = []
+_action_log: list[dict] = []   # last 50 actions
+
+
+async def broadcast(message: dict) -> None:
+    """Broadcast a message to all connected WebSocket clients."""
+    global _action_log
+    if message.get("type") in ("action", "status", "complete"):
+        _action_log.append(message)
+        if len(_action_log) > 50:
+            _action_log.pop(0)
+    dead = []
+    for ws in _active_websockets:
+        try:
+            await ws.send_json(message)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        _active_websockets.remove(ws)
+
+
+async def _run_batch_background():
+    global _agent_status
+    try:
+        approved_jobs = await db.get_approved_jobs()
+        if not approved_jobs:
+            await broadcast({"type": "action", "message": "No approved jobs found"})
+            _agent_status = "idle"
+            await broadcast({"type": "status", "status": "idle"})
+            return
+
+        def screenshot_cb(jpeg_bytes: bytes):
+            data = base64.b64encode(jpeg_bytes).decode()
+            asyncio.create_task(broadcast({
+                "type": "screenshot",
+                "data": data,
+            }))
+
+        results = await run_application_batch(
+            approved_jobs,
+            screenshot_callback=screenshot_cb,
+        )
+        applied = sum(1 for r in results if r.success)
+        failed = sum(1 for r in results if not r.success)
+
+        await broadcast({
+            "type": "complete",
+            "applied": applied,
+            "failed": failed,
+        })
+        await broadcast({
+            "type": "action",
+            "message": f"Batch complete — {applied} applied, {failed} failed",
+        })
+    except Exception as e:
+        await broadcast({"type": "action", "message": f"Agent error: {str(e)}"})
+    finally:
+        _agent_status = "idle"
+        await broadcast({"type": "status", "status": "idle"})
+
 
 # ── Agent control ────────────────────────────────────────────────────────────
 
 @app.post("/agent/start")
 async def agent_start():
+    global _agent_status
+    _agent_status = "running"
+    await broadcast({"type": "status", "status": "running"})
+    await broadcast({"type": "action",
+                     "message": "Agent started — fetching approved jobs"})
+    asyncio.create_task(_run_batch_background())
     return {"status": "ok"}
 
 
 @app.post("/agent/stop")
 async def agent_stop():
+    global _agent_status
+    _agent_status = "idle"
+    await broadcast({"type": "status", "status": "idle"})
     return {"status": "ok"}
 
 
 @app.get("/agent/status")
 async def agent_status():
-    return {"status": "ok"}
+    return {"status": _agent_status, "log": _action_log[-20:]}
 
 
 @app.websocket("/agent/stream")
 async def agent_stream(websocket: WebSocket):
     await websocket.accept()
-    await websocket.send_json({"status": "ok"})
-    await websocket.close()
+    _active_websockets.append(websocket)
+    await websocket.send_json({
+        "type": "status",
+        "status": _agent_status,
+    })
+    for entry in _action_log[-20:]:
+        await websocket.send_json(entry)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        if websocket in _active_websockets:
+            _active_websockets.remove(websocket)
 
 
 # ── Job queue ────────────────────────────────────────────────────────────────
