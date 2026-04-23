@@ -7,8 +7,7 @@ export async function GET() {
     if (!res.ok) throw new Error(`Agent returned ${res.status}`)
     const data = await res.json()
     return NextResponse.json(data)
-  } catch (error) {
-    console.error("Failed to fetch agent status:", error)
-    return NextResponse.json({ error: "Failed to fetch agent status" }, { status: 500 })
+  } catch {
+    return NextResponse.json({ error: "Agent offline", status: "idle" }, { status: 200 })
   }
 }
