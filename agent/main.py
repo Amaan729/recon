@@ -3,6 +3,8 @@
 import asyncio
 import base64
 import os
+from contextlib import asynccontextmanager
+
 import db
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from browser.application_agent import run_application_batch
@@ -11,10 +13,22 @@ from dotenv import load_dotenv
 from outreach.recruiter_scraper import find_and_store_recruiters
 from outreach.email_sender import send_recruiter_email
 from outreach.linkedin_queue import queue_connection_request, queue_inmail
+from scheduler.scheduler import get_scheduler, get_job_statuses
 
 load_dotenv()
 
-app = FastAPI(title="Recon Agent", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler = get_scheduler(broadcast_fn=broadcast)
+    scheduler.start()
+    print("[main] APScheduler started")
+    yield
+    scheduler.shutdown(wait=False)
+    print("[main] APScheduler stopped")
+
+
+app = FastAPI(title="Recon Agent", version="0.1.0", lifespan=lifespan)
 
 _allowed_origins = ["http://localhost:3001", "http://localhost:3000"]
 _app_url = os.getenv("NEXT_PUBLIC_APP_URL")
@@ -260,6 +274,13 @@ async def send_queued_outreach(outreach_id: str):
 @app.post("/linkedin/approve")
 async def linkedin_approve():
     return {"status": "ok"}
+
+
+# ── Scheduler status ─────────────────────────────────────────────────────────
+
+@app.get("/scheduler/status")
+async def scheduler_status():
+    return {"jobs": get_job_statuses()}
 
 
 # ── Health ───────────────────────────────────────────────────────────────────

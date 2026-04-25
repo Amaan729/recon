@@ -1,8 +1,7 @@
 name: Job Scraper
+# Cron retired — Railway APScheduler handles scheduling
 on:
-  schedule:
-    - cron: '0 */4 * * *'  # every 4 hours
-  workflow_dispatch:         # allow manual trigger
+  workflow_dispatch:
 jobs:
   scrape:
     runs-on: ubuntu-latest

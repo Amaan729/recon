@@ -1,7 +1,6 @@
 name: Instagram Monitor
+# Cron retired — Railway APScheduler handles scheduling
 on:
-  schedule:
-    - cron: '0 8,14,20 * * *'  # 8am, 2pm, 8pm UTC
   workflow_dispatch:
 jobs:
   monitor:
