@@ -18,3 +18,4 @@ google-auth==2.29.0
 google-api-python-client==2.130.0
 langchain-google-genai==1.0.7
 apscheduler>=3.10.0
+camoufox>=0.4.0
