@@ -15,6 +15,8 @@ from dataclasses import dataclass
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import db
 
+# TODO get_json_extraction_llm() available from llm_router for HTML->JSON extraction
+
 # ── Title relevance scoring ───────────────────────────────────────
 
 HIGH_RELEVANCE_TITLES = [

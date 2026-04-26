@@ -275,15 +275,11 @@ async def _send_via_gmail(
 
 async def _call_cerebras_email(prompt: str) -> str | None:
     try:
-        from cerebras.cloud.sdk import Cerebras
-        client = Cerebras(api_key=os.environ["CEREBRAS_API_KEY"])
-        response = await asyncio.to_thread(
-            client.chat.completions.create,
-            model="llama3.3-70b",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
-        )
-        return response.choices[0].message.content.strip()
+        from llm_router import get_email_llm
+
+        llm = get_email_llm()
+        response = await llm.ainvoke(prompt)
+        return getattr(response, "content", str(response)).strip()
     except Exception as e:
         print(f"Cerebras email call failed: {e}")
         return None
@@ -291,11 +287,11 @@ async def _call_cerebras_email(prompt: str) -> str | None:
 
 async def _call_gemini_email(prompt: str) -> str | None:
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=os.environ["GOOGLE_AI_API_KEY"])
-        model = genai.GenerativeModel("gemini-2.5-flash")
-        response = await asyncio.to_thread(model.generate_content, prompt)
-        return response.text.strip()
+        from llm_router import get_email_llm
+
+        llm = get_email_llm()
+        response = await llm.ainvoke(prompt)
+        return getattr(response, "content", str(response)).strip()
     except Exception as e:
         print(f"Gemini email call failed: {e}")
         return None

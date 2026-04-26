@@ -186,19 +186,8 @@ def _get_llm():
     Return the LLM instance for browser-use.
     Uses Gemini 2.5 Flash via langchain-google-genai.
     """
-    try:
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        return ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=os.environ["GOOGLE_AI_API_KEY"],
-            temperature=0.1,
-        )
-    except Exception as e:
-        raise RuntimeError(
-            f"Could not initialize LLM for browser-use: {e}. "
-            "Ensure GOOGLE_AI_API_KEY is set and "
-            "langchain-google-genai is installed."
-        )
+    from llm_router import get_browser_nav_llm
+    return get_browser_nav_llm()
 
 
 # ── Screenshot streaming ──────────────────────────────────────────

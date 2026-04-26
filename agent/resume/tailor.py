@@ -315,14 +315,11 @@ async def generate_cover_letter(
 async def _call_gemini_json(prompt: str) -> dict | None:
     """Call Gemini 2.5 Flash and parse JSON response."""
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=os.environ["GOOGLE_AI_API_KEY"])
-        model = genai.GenerativeModel(
-            "gemini-2.5-flash",
-            generation_config={"response_mime_type": "application/json"},
-        )
-        response = await asyncio.to_thread(model.generate_content, prompt)
-        return _parse_json(response.text)
+        from llm_router import get_tailoring_llm
+
+        llm = get_tailoring_llm()
+        response = await llm.ainvoke(prompt)
+        return _parse_json(getattr(response, "content", str(response)))
     except Exception as e:
         print(f"Gemini JSON call failed: {e}")
         return None
@@ -331,15 +328,11 @@ async def _call_gemini_json(prompt: str) -> dict | None:
 async def _call_mistral_json(prompt: str) -> dict | None:
     """Call Mistral Small and parse JSON response."""
     try:
-        from mistralai import Mistral
-        client = Mistral(api_key=os.environ["MISTRAL_API_KEY"])
-        response = await asyncio.to_thread(
-            client.chat.complete,
-            model="mistral-small-latest",
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-        )
-        return _parse_json(response.choices[0].message.content)
+        from llm_router import get_tailoring_llm
+
+        llm = get_tailoring_llm()
+        response = await llm.ainvoke(prompt)
+        return _parse_json(getattr(response, "content", str(response)))
     except Exception as e:
         print(f"Mistral JSON call failed: {e}")
         return None
@@ -348,15 +341,11 @@ async def _call_mistral_json(prompt: str) -> dict | None:
 async def _call_cerebras_text(prompt: str) -> str | None:
     """Call Cerebras Llama 3.3 70B for fast text generation."""
     try:
-        from cerebras.cloud.sdk import Cerebras
-        client = Cerebras(api_key=os.environ["CEREBRAS_API_KEY"])
-        response = await asyncio.to_thread(
-            client.chat.completions.create,
-            model="llama3.3-70b",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=800,
-        )
-        return response.choices[0].message.content.strip()
+        from llm_router import get_cover_letter_llm
+
+        llm = get_cover_letter_llm()
+        response = await llm.ainvoke(prompt)
+        return getattr(response, "content", str(response)).strip()
     except Exception as e:
         print(f"Cerebras text call failed: {e}")
         return None
@@ -365,11 +354,11 @@ async def _call_cerebras_text(prompt: str) -> str | None:
 async def _call_gemini_text(prompt: str) -> str | None:
     """Call Gemini 2.5 Flash for text generation."""
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=os.environ["GOOGLE_AI_API_KEY"])
-        model = genai.GenerativeModel("gemini-2.5-flash")
-        response = await asyncio.to_thread(model.generate_content, prompt)
-        return response.text.strip()
+        from llm_router import get_cover_letter_llm
+
+        llm = get_cover_letter_llm()
+        response = await llm.ainvoke(prompt)
+        return getattr(response, "content", str(response)).strip()
     except Exception as e:
         print(f"Gemini text call failed: {e}")
         return None
@@ -378,15 +367,11 @@ async def _call_gemini_text(prompt: str) -> str | None:
 async def _call_mistral_text(prompt: str) -> str | None:
     """Call Mistral Small for text generation."""
     try:
-        from mistralai import Mistral
-        client = Mistral(api_key=os.environ["MISTRAL_API_KEY"])
-        response = await asyncio.to_thread(
-            client.chat.complete,
-            model="mistral-small-latest",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=800,
-        )
-        return response.choices[0].message.content.strip()
+        from llm_router import get_cover_letter_llm
+
+        llm = get_cover_letter_llm()
+        response = await llm.ainvoke(prompt)
+        return getattr(response, "content", str(response)).strip()
     except Exception as e:
         print(f"Mistral text call failed: {e}")
         return None
