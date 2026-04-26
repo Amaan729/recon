@@ -7,6 +7,7 @@ upload, and email verification.
 
 import asyncio
 import base64
+import logging
 import os
 import re
 import sys
@@ -15,7 +16,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+try:
+    from camoufox.async_api import AsyncCamoufox
+except ImportError:
+    AsyncCamoufox = None
+
+try:
+    import twocaptcha
+except ImportError:
+    twocaptcha = None
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+logger = logging.getLogger(__name__)
 
 CANDIDATE = {
     "first_name": "Amaan",
@@ -216,6 +229,147 @@ class ScreenshotStreamer:
         self._running = False
 
 
+async def _detect_success(page) -> bool:
+    """Return True when the page looks like a completed application."""
+    if page is None:
+        return False
+
+    success_paths = (
+        "/confirmation",
+        "/thank",
+        "/submitted",
+        "/success",
+        "/apply/complete",
+        "/application/complete",
+    )
+    success_titles = (
+        "thank you",
+        "application submitted",
+        "successfully applied",
+        "application received",
+    )
+    success_html_markers = (
+        "application has been submitted",
+        "we have received your application",
+        "you have successfully applied",
+        "application is complete",
+    )
+
+    try:
+        url = str(getattr(page, "url", "") or "").lower()
+        if any(path in url for path in success_paths):
+            return True
+    except Exception:
+        pass
+
+    try:
+        title = (await page.title()).lower()
+        if any(marker in title for marker in success_titles):
+            return True
+    except Exception:
+        pass
+
+    try:
+        html = (await page.content()).lower()
+        if any(marker in html for marker in success_html_markers):
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+async def _attempt_2captcha(page, api_key: str) -> bool:
+    """Solve a reCAPTCHA v2 challenge via 2Captcha and inject the token."""
+    if page is None or not api_key:
+        return False
+    if twocaptcha is None:
+        logger.warning("2Captcha requested but twocaptcha is not installed")
+        return False
+
+    try:
+        html = await page.content()
+        if "recaptcha" not in html.lower():
+            return False
+
+        sitekey_match = re.search(r'data-sitekey="([^"]+)"', html, re.IGNORECASE)
+        if not sitekey_match:
+            logger.warning("2Captcha fallback could not find reCAPTCHA sitekey")
+            return False
+
+        sitekey = sitekey_match.group(1)
+        page_url = str(getattr(page, "url", "") or "")
+        solver = twocaptcha.TwoCaptcha(api_key)
+        result = await asyncio.to_thread(
+            solver.recaptcha,
+            sitekey=sitekey,
+            url=page_url,
+        )
+        token = result.get("code")
+        if not token:
+            logger.warning("2Captcha fallback returned no token")
+            return False
+
+        await page.evaluate(
+            """
+            (token) => {
+                let el = document.getElementById("g-recaptcha-response");
+                if (!el) {
+                    el = document.querySelector('[name="g-recaptcha-response"]');
+                }
+                if (!el) {
+                    el = document.createElement("textarea");
+                    el.id = "g-recaptcha-response";
+                    el.name = "g-recaptcha-response";
+                    el.style.display = "none";
+                    document.body.appendChild(el);
+                }
+                el.value = token;
+                el.innerHTML = token;
+                el.dispatchEvent(new Event("input", { bubbles: true }));
+                el.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+            """,
+            token,
+        )
+        return True
+    except Exception as e:
+        logger.warning("2Captcha fallback failed: %s", e)
+        return False
+
+
+def _result_is_success(final_result) -> bool:
+    return (
+        final_result is not None
+        and "success" in str(final_result).lower()
+    )
+
+
+def _result_mentions_captcha(final_result) -> bool:
+    if final_result is None:
+        return False
+    text = str(final_result).lower()
+    return "captcha" in text or "recaptcha" in text
+
+
+async def _get_active_page(browser, fallback_page=None):
+    """Best-effort lookup of the page currently being used by the browser."""
+    try:
+        contexts = list(getattr(browser, "contexts", []) or [])
+        pages = []
+        for context in contexts:
+            pages.extend(getattr(context, "pages", []) or [])
+        for page in reversed(pages):
+            try:
+                if not page.is_closed():
+                    return page
+            except Exception:
+                return page
+    except Exception:
+        pass
+    return fallback_page
+
+
 # ── Main application agent ────────────────────────────────────────
 
 async def apply_to_job(
@@ -247,8 +401,14 @@ async def apply_to_job(
         from browser_use import Agent
         from browser_use.browser.browser import Browser, BrowserConfig
 
+        if AsyncCamoufox is None:
+            raise RuntimeError(
+                "Camoufox is not installed. Ensure camoufox is available before applying."
+            )
+
         llm = _get_llm()
         password = os.environ.get(PORTAL_PASSWORD_ENV, "")
+        twocaptcha_api_key = os.environ.get("TWOCAPTCHA_API_KEY", "").strip()
 
         task = _build_task_prompt(
             job_url=job_url,
@@ -259,55 +419,64 @@ async def apply_to_job(
             password=password,
         )
 
-        browser = Browser(
-            config=BrowserConfig(
-                headless=True,
-                disable_security=False,
+        async with AsyncCamoufox(headless=True, geoip=True) as browser:
+            page = await browser.new_page()
+
+            agent = Agent(
+                task=task,
+                llm=llm,
+                browser=browser,
+                max_actions_per_step=10,
             )
-        )
 
-        agent = Agent(
-            task=task,
-            llm=llm,
-            browser=browser,
-            max_actions_per_step=10,
-        )
+            print(f"  Applying to {company} - {job_title}")
+            print(f"  URL: {job_url}")
 
-        print(f"  Applying to {company} - {job_title}")
-        print(f"  URL: {job_url}")
+            result = await agent.run(max_steps=50)
 
-        result = await agent.run(max_steps=50)
+            active_page = await _get_active_page(browser, page)
+            final_result = result.final_result() if result else None
+            success = _result_is_success(final_result)
+            if not success and await _detect_success(active_page):
+                success = True
 
-        final_result = result.final_result() if result else None
-        success = (
-            final_result is not None
-            and "success" in str(final_result).lower()
-        )
+            if (
+                not success
+                and twocaptcha_api_key
+                and _result_mentions_captcha(final_result)
+                and await _attempt_2captcha(active_page, twocaptcha_api_key)
+            ):
+                retry_result = await agent.run(max_steps=50)
+                active_page = await _get_active_page(browser, active_page)
+                final_result = retry_result.final_result() if retry_result else None
+                success = _result_is_success(final_result)
+                if not success and await _detect_success(active_page):
+                    success = True
 
-        if success:
-            import db
-            await db.update_job_status(job_id, "applied")
-            app_id = await _create_application_record(
-                job_id=job_id,
-                resume_pdf_path=resume_pdf_path,
-                cover_letter=cover_letter,
-            )
-            print(f"  Applied successfully — app_id: {app_id}")
-            return ApplicationResult(
-                job_id=job_id,
-                success=True,
-                status="applied",
-                application_url=job_url,
-            )
-        else:
-            import db
-            await db.update_job_status(job_id, "failed")
-            return ApplicationResult(
-                job_id=job_id,
-                success=False,
-                status="failed",
-                error=str(final_result) if final_result else "Agent did not confirm success",
-            )
+            if success:
+                import db
+                await db.update_job_status(job_id, "applied")
+                app_id = await _create_application_record(
+                    job_id=job_id,
+                    resume_pdf_path=resume_pdf_path,
+                    cover_letter=cover_letter,
+                )
+                print(f"  Applied successfully — app_id: {app_id}")
+                return ApplicationResult(
+                    job_id=job_id,
+                    success=True,
+                    status="applied",
+                    application_url=job_url,
+                )
+            else:
+                import db
+                await db.update_job_status(job_id, "failed")
+                return ApplicationResult(
+                    job_id=job_id,
+                    success=False,
+                    status="failed",
+                    error=str(final_result) if final_result else "Agent did not confirm success",
+                )
 
     except Exception as e:
         print(f"  Application failed: {e}")
