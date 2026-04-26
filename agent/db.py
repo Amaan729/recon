@@ -6,6 +6,9 @@ Job, Application, Recruiter, and RecruiterOutreach records.
 """
 
 import os
+from datetime import datetime
+from uuid import uuid4
+
 import libsql_client
 from dotenv import load_dotenv
 
@@ -213,6 +216,58 @@ async def get_recruiters_for_company(company: str) -> list[dict]:
     )
     return [dict(zip([c.name for c in result.columns], row))
             for row in result.rows]
+
+
+async def get_active_ats_slugs(board: str | None = None) -> list[dict]:
+    """Return all active ATS slugs, optionally scoped to one board."""
+    client = get_client()
+    if board is not None:
+        result = await client.execute(
+            """
+            SELECT id, slug, atsBoard, company, lastScrapedAt, active
+            FROM AtsSlugs
+            WHERE active = 1 AND atsBoard = ?
+            ORDER BY company ASC
+            """,
+            [board],
+        )
+    else:
+        result = await client.execute(
+            """
+            SELECT id, slug, atsBoard, company, lastScrapedAt, active
+            FROM AtsSlugs
+            WHERE active = 1
+            ORDER BY atsBoard ASC, company ASC
+            """
+        )
+    columns = [
+        c.name if hasattr(c, "name") else str(c)
+        for c in result.columns
+    ]
+    return [dict(zip(columns, row))
+            for row in result.rows]
+
+
+async def upsert_ats_slug(slug: str, ats_board: str, company: str) -> None:
+    """Insert an ATS slug row if it does not already exist."""
+    client = get_client()
+    await client.execute(
+        """
+        INSERT OR IGNORE INTO AtsSlugs
+          (id, slug, atsBoard, company, active, createdAt)
+        VALUES (?, ?, ?, ?, 1, ?)
+        """,
+        [str(uuid4()), slug, ats_board, company, datetime.utcnow().isoformat()],
+    )
+
+
+async def update_ats_slug_scraped(slug: str, ats_board: str) -> None:
+    """Update the last scrape timestamp for one ATS slug row."""
+    client = get_client()
+    await client.execute(
+        "UPDATE AtsSlugs SET lastScrapedAt = ? WHERE slug = ? AND atsBoard = ?",
+        [datetime.utcnow().isoformat(), slug, ats_board],
+    )
 
 
 def _cuid() -> str:

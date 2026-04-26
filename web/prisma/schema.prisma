@@ -214,3 +214,15 @@ model RecruiterOutreach {
   sentAt        DateTime?
   createdAt     DateTime     @default(now())
 }
+
+model AtsSlugs {
+  id            String   @id @default(cuid())
+  slug          String
+  atsBoard      String   // greenhouse | lever | ashby | workday
+  company       String
+  lastScrapedAt DateTime?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  @@unique([slug, atsBoard])
+}
