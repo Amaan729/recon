@@ -9,11 +9,12 @@ import db
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from browser.application_agent import run_application_batch
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from outreach.recruiter_scraper import find_and_store_recruiters
 from outreach.email_sender import send_recruiter_email
 from outreach.linkedin_queue import queue_connection_request, queue_inmail
-from scheduler.scheduler import get_scheduler, get_job_statuses
+from scheduler.scheduler import get_scheduler, get_job_statuses, trigger_job_now
 
 load_dotenv()
 
@@ -277,6 +278,17 @@ async def linkedin_approve():
 
 
 # ── Scheduler status ─────────────────────────────────────────────────────────
+
+@app.post("/scheduler/trigger/{job_id}")
+async def scheduler_trigger(job_id: str):
+    triggered = await trigger_job_now(job_id)
+    if not triggered:
+        return JSONResponse(
+            status_code=404,
+            content={"status": "error", "message": "Unknown job_id"},
+        )
+    return {"status": "ok", "job_id": job_id, "triggered": True}
+
 
 @app.get("/scheduler/status")
 async def scheduler_status():

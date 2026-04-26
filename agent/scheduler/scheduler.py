@@ -4,6 +4,7 @@ Runs all scrapers on a fixed schedule inside the FastAPI process.
 Replaces GitHub Actions cron jobs — Railway keeps this container alive 24/7.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Callable, Awaitable, Any
@@ -191,6 +192,23 @@ def get_scheduler(
         _scheduler = AsyncIOScheduler(timezone="UTC")
         _register_jobs(_scheduler)
     return _scheduler
+
+
+async def trigger_job_now(job_id: str) -> bool:
+    """Start a known scraper job immediately without waiting for completion."""
+    job_map = {
+        "linkedin": _job_linkedin,
+        "ats_api": _job_ats_api,
+        "workday": _job_workday,
+        "instagram": _job_instagram,
+        "ats_discovery": _job_ats_discovery,
+        "icims": _job_icims,
+    }
+    job = job_map.get(job_id)
+    if job is None:
+        return False
+    asyncio.create_task(job())
+    return True
 
 
 def get_job_statuses() -> list[dict]:
