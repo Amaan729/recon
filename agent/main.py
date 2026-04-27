@@ -4,6 +4,7 @@ import asyncio
 import base64
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 import db
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -45,6 +46,7 @@ app.add_middleware(
 
 # Agent state
 _agent_status = "idle"   # idle | running | error
+_agent_last_run_at: str | None = None
 _active_websockets: list[WebSocket] = []
 _action_log: list[dict] = []   # last 50 actions
 
@@ -67,7 +69,8 @@ async def broadcast(message: dict) -> None:
 
 
 async def _run_batch_background():
-    global _agent_status
+    global _agent_last_run_at, _agent_status
+    had_error = False
     try:
         approved_jobs = await db.get_approved_jobs()
         if not approved_jobs:
@@ -100,10 +103,15 @@ async def _run_batch_background():
             "message": f"Batch complete — {applied} applied, {failed} failed",
         })
     except Exception as e:
+        had_error = True
+        _agent_status = "error"
         await broadcast({"type": "action", "message": f"Agent error: {str(e)}"})
+        await broadcast({"type": "status", "status": "error"})
     finally:
-        _agent_status = "idle"
-        await broadcast({"type": "status", "status": "idle"})
+        _agent_last_run_at = datetime.now(timezone.utc).isoformat()
+        if not had_error:
+            _agent_status = "idle"
+            await broadcast({"type": "status", "status": "idle"})
 
 
 async def _get_job_for_outreach(job_id: str) -> dict | None:
@@ -176,6 +184,94 @@ def _recruiter_relevance(recruiter: dict) -> int:
     return int(score or 0)
 
 
+async def _get_pending_jobs_payload() -> list[dict]:
+    """Return pending jobs with the full fields expected by dashboard UIs."""
+    client = db.get_client()
+    result = await client.execute(
+        """
+        SELECT id, title, company, location, jobBoardUrl, source,
+               status, isTopPriority, jdText, matchScore, createdAt
+        FROM Job
+        WHERE status = 'pending'
+        ORDER BY isTopPriority DESC, createdAt ASC
+        """
+    )
+    columns = [c.name for c in result.columns]
+    return [dict(zip(columns, row)) for row in result.rows]
+
+
+async def _get_dashboard_stats() -> dict:
+    """Return aggregate stats for the dashboard overview page."""
+    client = db.get_client()
+    result = await client.execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM Job WHERE status = 'pending') AS pending,
+            (SELECT COUNT(*) FROM Application
+             WHERE status = 'submitted') AS submitted,
+            (SELECT COUNT(*) FROM RecruiterOutreach
+             WHERE sentAt IS NOT NULL
+               AND sentAt >= datetime('now', 'localtime', 'start of day'))
+                AS outreachToday,
+            (SELECT COUNT(*) FROM Job
+             WHERE status IN ('approved', 'applied')) AS activePipeline
+        """
+    )
+    row = result.rows[0] if result.rows else (0, 0, 0, 0)
+    return {
+        "pending": int(row[0]),
+        "submitted": int(row[1]),
+        "outreachToday": int(row[2]),
+        "activePipeline": int(row[3]),
+    }
+
+
+async def _get_recent_applications(limit: int = 10) -> list[dict]:
+    """Return recent applications joined with job metadata for dashboards."""
+    client = db.get_client()
+    result = await client.execute(
+        """
+        SELECT
+            a.id,
+            a.status,
+            a.portalEmail,
+            a.resumeVersion,
+            a.createdAt,
+            a.submittedAt,
+            j.title AS jobTitle,
+            j.company AS jobCompany,
+            j.location AS jobLocation,
+            j.source AS jobSource,
+            j.jobBoardUrl,
+            j.isTopPriority
+        FROM Application a
+        JOIN Job j ON j.id = a.jobId
+        ORDER BY COALESCE(a.submittedAt, a.createdAt) DESC
+        LIMIT ?
+        """,
+        [limit],
+    )
+    applications = []
+    for row in result.rows:
+        applications.append({
+            "id": row[0],
+            "status": row[1],
+            "portalEmail": row[2],
+            "resumeVersion": row[3],
+            "createdAt": row[4],
+            "submittedAt": row[5],
+            "job": {
+                "title": row[6],
+                "company": row[7],
+                "location": row[8],
+                "source": row[9],
+                "jobBoardUrl": row[10],
+                "isTopPriority": bool(row[11]),
+            },
+        })
+    return applications
+
+
 # ── Agent control ────────────────────────────────────────────────────────────
 
 @app.post("/agent/start")
@@ -199,7 +295,11 @@ async def agent_stop():
 
 @app.get("/agent/status")
 async def agent_status():
-    return {"status": _agent_status, "log": _action_log[-20:]}
+    return {
+        "status": _agent_status,
+        "log": _action_log[-20:],
+        "lastRunAt": _agent_last_run_at,
+    }
 
 
 @app.websocket("/agent/stream")
@@ -356,8 +456,19 @@ async def jobs_skip(job_id: str):
 
 @app.get("/jobs/queue")
 async def jobs_queue():
-    jobs = await db.get_pending_jobs()
+    jobs = await _get_pending_jobs_payload()
     return {"jobs": jobs}
+
+
+@app.get("/dashboard/stats")
+async def dashboard_stats():
+    return await _get_dashboard_stats()
+
+
+@app.get("/applications/recent")
+async def recent_applications():
+    applications = await _get_recent_applications(limit=10)
+    return {"applications": applications}
 
 
 # ── Application batch ────────────────────────────────────────────────────────
