@@ -98,11 +98,21 @@ async def ai_match_score(job: dict) -> int:
 
 async def _score_gemini(prompt: str) -> int | None:
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=os.environ["GOOGLE_AI_API_KEY"])
-        model = genai.GenerativeModel("gemini-2.5-flash")
-        response = await asyncio.to_thread(model.generate_content, prompt)
-        match = re.search(r"\d+", response.text)
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            google_api_key=os.environ["GOOGLE_AI_API_KEY"],
+            temperature=0.1,
+        )
+        response = await llm.ainvoke(prompt)
+        content = getattr(response, "content", str(response))
+        if isinstance(content, list):
+            content = "".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in content
+            )
+        match = re.search(r"\d+", str(content))
         if not match:
             return None
         return min(100, max(0, int(match.group())))

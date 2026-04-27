@@ -295,11 +295,21 @@ async def _call_cerebras(prompt: str, max_tokens: int = 200) -> str | None:
 
 async def _call_gemini(prompt: str, max_tokens: int = 200) -> str | None:
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=os.environ["GOOGLE_AI_API_KEY"])
-        model = genai.GenerativeModel("gemini-2.5-flash")
-        response = await asyncio.to_thread(model.generate_content, prompt)
-        return response.text.strip()
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            google_api_key=os.environ["GOOGLE_AI_API_KEY"],
+            temperature=0.2,
+        )
+        response = await llm.ainvoke(prompt)
+        content = getattr(response, "content", str(response))
+        if isinstance(content, list):
+            content = "".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in content
+            )
+        return str(content).strip()
     except Exception as e:
         print(f"Gemini call failed: {e}")
         return None
