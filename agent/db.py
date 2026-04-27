@@ -6,7 +6,8 @@ Job, Application, Recruiter, and RecruiterOutreach records.
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 from uuid import uuid4
 
 import libsql_client
@@ -54,6 +55,13 @@ async def insert_job(
     if existing.rows:
         return existing.rows[0][0]
 
+    try:
+        if await is_fuzzy_duplicate(title, company):
+            print(f"[db] fuzzy duplicate skipped: {title} @ {company}")
+            return "fuzzy_duplicate"
+    except Exception as e:
+        print(f"[db] fuzzy duplicate check failed: {e}")
+
     await client.execute(
         """
         INSERT INTO Job
@@ -66,6 +74,31 @@ async def insert_job(
          source, int(is_top_priority), jd_text],
     )
     return job_id
+
+
+async def is_fuzzy_duplicate(title: str, company: str) -> bool:
+    """Return True if a recent job from the same company has a similar title."""
+    client = get_client()
+    cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
+    result = await client.execute(
+        "SELECT id, title FROM Job WHERE LOWER(company) = LOWER(?) AND createdAt >= ?",
+        [company.strip(), cutoff],
+    )
+
+    title_lower = title.lower()
+    for row in result.rows:
+        row_title = row[1]
+        if not row_title:
+            continue
+        similarity = SequenceMatcher(
+            None,
+            title_lower,
+            str(row_title).lower(),
+        ).ratio()
+        if similarity >= 0.85:
+            return True
+
+    return False
 
 
 async def get_pending_jobs() -> list[dict]:
