@@ -1,98 +1,334 @@
-"use client";
+"use client"
 
-import { useState, useEffect } from "react";
-import { toast } from "sonner";
+import { useCallback, useEffect, useState } from "react"
+import { toast } from "sonner"
+
+type CandidateProfile = {
+  firstName: string
+  lastName: string
+  email: string
+  phone: string
+  university: string
+  major: string
+  gpa: string
+  graduationYear: string
+  graduationMonth: string
+  linkedinUrl: string
+  githubUrl: string
+  portfolioUrl: string
+  location: string
+  workAuthorization: string
+  requiresSponsorship: string
+}
+
+const AGENT_URL = (process.env.NEXT_PUBLIC_AGENT_URL ?? "http://localhost:8000").replace(/\/$/, "")
+
+const EMPTY_PROFILE: CandidateProfile = {
+  firstName: "",
+  lastName: "",
+  email: "",
+  phone: "",
+  university: "",
+  major: "",
+  gpa: "",
+  graduationYear: "",
+  graduationMonth: "",
+  linkedinUrl: "",
+  githubUrl: "",
+  portfolioUrl: "",
+  location: "",
+  workAuthorization: "Yes",
+  requiresSponsorship: "No",
+}
+
+const INPUT_CLASS =
+  "w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder:text-white/25 focus:outline-none focus:border-white/25 focus:bg-white/8 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
 
 export default function SettingsPage() {
-  const [key, setKey] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [copied, setCopied] = useState(false);
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3001";
+  const [profile, setProfile] = useState<CandidateProfile>(EMPTY_PROFILE)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  const fetchProfile = useCallback(async () => {
+    try {
+      const res = await fetch(`${AGENT_URL}/candidate`, { cache: "no-store" })
+      if (!res.ok) throw new Error("candidate fetch failed")
+      const data = await res.json() as CandidateProfile
+      setProfile({
+        firstName: data.firstName ?? "",
+        lastName: data.lastName ?? "",
+        email: data.email ?? "",
+        phone: data.phone ?? "",
+        university: data.university ?? "",
+        major: data.major ?? "",
+        gpa: data.gpa ?? "",
+        graduationYear: data.graduationYear ?? "",
+        graduationMonth: data.graduationMonth ?? "",
+        linkedinUrl: data.linkedinUrl ?? "",
+        githubUrl: data.githubUrl ?? "",
+        portfolioUrl: data.portfolioUrl ?? "",
+        location: data.location ?? "",
+        workAuthorization: data.workAuthorization ?? "Yes",
+        requiresSponsorship: data.requiresSponsorship ?? "No",
+      })
+    } catch {
+      toast.error("Failed to load profile")
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    fetch("/api/extension")
-      .then((r) => r.json())
-      .then((d) => { setKey(d.key ?? ""); setLoading(false); });
-  }, []);
+    const t = window.setTimeout(() => {
+      void fetchProfile()
+    }, 0)
+    return () => clearTimeout(t)
+  }, [fetchProfile])
 
-  function copy(text: string) {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    toast.success("Copied!");
-    setTimeout(() => setCopied(false), 2000);
+  const updateField = (field: keyof CandidateProfile, value: string) => {
+    setProfile(prev => ({ ...prev, [field]: value }))
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const res = await fetch(`${AGENT_URL}/candidate`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(profile),
+      })
+      if (!res.ok) throw new Error("candidate save failed")
+      const data = await res.json() as CandidateProfile
+      setProfile({
+        firstName: data.firstName ?? "",
+        lastName: data.lastName ?? "",
+        email: data.email ?? "",
+        phone: data.phone ?? "",
+        university: data.university ?? "",
+        major: data.major ?? "",
+        gpa: data.gpa ?? "",
+        graduationYear: data.graduationYear ?? "",
+        graduationMonth: data.graduationMonth ?? "",
+        linkedinUrl: data.linkedinUrl ?? "",
+        githubUrl: data.githubUrl ?? "",
+        portfolioUrl: data.portfolioUrl ?? "",
+        location: data.location ?? "",
+        workAuthorization: data.workAuthorization ?? "Yes",
+        requiresSponsorship: data.requiresSponsorship ?? "No",
+      })
+      toast.success("Profile saved")
+    } catch {
+      toast.error("Failed to save profile")
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
-    <div className="p-8 max-w-2xl">
+    <div className="p-8 max-w-4xl">
       <div className="mb-7">
-        <h1 className="text-2xl font-bold text-white">Settings</h1>
-        <p className="text-white/40 text-sm mt-1">Configure your Chrome extension and preferences.</p>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold text-white">Settings</h1>
+          {!loading && <span className="stat-badge">Candidate</span>}
+        </div>
+        <p className="text-white/40 text-sm mt-1">
+          Manage your candidate profile and application preferences.
+        </p>
       </div>
 
-      {/* Extension setup */}
-      <div className="glass-card p-6 mb-5">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center text-xl">🧩</div>
-          <div>
-            <h2 className="text-white font-semibold text-sm">Chrome Extension Setup</h2>
-            <p className="text-white/40 text-xs">Auto-tracks emails sent from Gmail with no watermarks.</p>
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <div>
-            <label className="text-white/45 text-xs font-semibold uppercase tracking-wider mb-2 block">Your API Key</label>
-            <div className="flex gap-2">
-              <input
-                readOnly
-                value={loading ? "Loading..." : key}
-                className="flex-1 glass-input px-4 py-3 text-sm font-mono focus:outline-none"
-              />
-              <button onClick={() => copy(key)} className="btn-ghost px-4 py-3 text-sm shrink-0">
-                {copied ? "✓" : "Copy"}
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <label className="text-white/45 text-xs font-semibold uppercase tracking-wider mb-2 block">Dashboard URL</label>
-            <div className="flex gap-2">
-              <input readOnly value={appUrl} className="flex-1 glass-input px-4 py-3 text-sm font-mono focus:outline-none" />
-              <button onClick={() => copy(appUrl)} className="btn-ghost px-4 py-3 text-sm shrink-0">Copy</button>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-5 p-4 rounded-xl bg-white/4 border border-white/8 space-y-2.5 text-xs text-white/55">
-          <p className="text-white/75 font-semibold text-sm mb-1">How to install the extension:</p>
-          <p>1. Open Chrome → go to <span className="text-blue-400 font-mono">chrome://extensions</span></p>
-          <p>2. Enable <span className="text-white/80">Developer mode</span> (top right toggle)</p>
-          <p>3. Click <span className="text-white/80">Load unpacked</span> → select the <span className="text-blue-400 font-mono">chrome-extension/</span> folder from the project</p>
-          <p>4. Click the extension icon → paste your API Key and Dashboard URL → Save</p>
-          <p>5. Open Gmail and compose an email — tracking activates automatically 🎯</p>
-        </div>
-      </div>
-
-      {/* Tracking behavior */}
       <div className="glass-card p-6">
-        <h2 className="text-white font-semibold text-sm mb-4">Tracking Behavior</h2>
-        <div className="space-y-3 text-sm text-white/60">
-          {[
-            { icon: "🛡️", label: "Self-open filtering", desc: "Opens from your own IP are detected and excluded from counts." },
-            { icon: "🤖", label: "Gmail prefetch blocking", desc: "Gmail's image proxy is detected and ignored — only real opens count." },
-            { icon: "📍", label: "Location tracking", desc: "City, region, and country are resolved from the opener's IP address." },
-            { icon: "📱", label: "Device detection", desc: "Device type and OS are parsed from the browser user-agent." },
-          ].map(({ icon, label, desc }) => (
-            <div key={label} className="flex items-start gap-3 p-3 rounded-xl bg-white/4">
-              <span className="text-lg shrink-0">{icon}</span>
-              <div>
-                <div className="text-white/80 font-medium text-xs mb-0.5">{label}</div>
-                <div className="text-white/40 text-xs">{desc}</div>
-              </div>
-            </div>
-          ))}
+        <div className="flex items-center justify-between gap-4 flex-wrap mb-6">
+          <div>
+            <h2 className="text-white font-semibold text-lg">Candidate Profile</h2>
+            <p className="text-white/35 text-sm mt-1">
+              This profile is used to fill applications and outreach automatically.
+            </p>
+          </div>
+
+          <button
+            onClick={handleSave}
+            disabled={loading || saving}
+            className="btn-primary px-4 py-2 text-sm shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {saving ? "Saving…" : "Save Changes"}
+          </button>
         </div>
+
+        {loading ? (
+          <div className="space-y-4">
+            {Array.from({ length: 7 }, (_, idx) => (
+              <div key={idx} className="space-y-2">
+                <div className="h-4 w-28 rounded-md bg-white/8 animate-pulse" />
+                <div className="h-11 rounded-xl bg-white/6 animate-pulse" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Field
+                label="First Name"
+                value={profile.firstName}
+                onChange={value => updateField("firstName", value)}
+                disabled={saving}
+              />
+              <Field
+                label="Last Name"
+                value={profile.lastName}
+                onChange={value => updateField("lastName", value)}
+                disabled={saving}
+              />
+            </div>
+
+            <Field
+              label="Email"
+              value={profile.email}
+              onChange={value => updateField("email", value)}
+              disabled={saving}
+            />
+
+            <Field
+              label="Phone"
+              value={profile.phone}
+              onChange={value => updateField("phone", value)}
+              disabled={saving}
+            />
+
+            <Field
+              label="University"
+              value={profile.university}
+              onChange={value => updateField("university", value)}
+              disabled={saving}
+            />
+
+            <Field
+              label="Major"
+              value={profile.major}
+              onChange={value => updateField("major", value)}
+              disabled={saving}
+            />
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Field
+                label="GPA"
+                value={profile.gpa}
+                onChange={value => updateField("gpa", value)}
+                disabled={saving}
+              />
+              <Field
+                label="Graduation Month"
+                value={profile.graduationMonth}
+                onChange={value => updateField("graduationMonth", value)}
+                disabled={saving}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Field
+                label="Graduation Year"
+                value={profile.graduationYear}
+                onChange={value => updateField("graduationYear", value)}
+                disabled={saving}
+              />
+              <Field
+                label="Location"
+                value={profile.location}
+                onChange={value => updateField("location", value)}
+                disabled={saving}
+              />
+            </div>
+
+            <Field
+              label="LinkedIn URL"
+              value={profile.linkedinUrl}
+              onChange={value => updateField("linkedinUrl", value)}
+              disabled={saving}
+            />
+
+            <Field
+              label="GitHub URL"
+              value={profile.githubUrl}
+              onChange={value => updateField("githubUrl", value)}
+              disabled={saving}
+            />
+
+            <Field
+              label="Portfolio URL"
+              value={profile.portfolioUrl}
+              onChange={value => updateField("portfolioUrl", value)}
+              disabled={saving}
+            />
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <SelectField
+                label="Work Authorization"
+                value={profile.workAuthorization}
+                onChange={value => updateField("workAuthorization", value)}
+                disabled={saving}
+              />
+              <SelectField
+                label="Requires Sponsorship"
+                value={profile.requiresSponsorship}
+                onChange={value => updateField("requiresSponsorship", value)}
+                disabled={saving}
+              />
+            </div>
+          </div>
+        )}
       </div>
     </div>
-  );
+  )
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  disabled: boolean
+}) {
+  return (
+    <label className="block">
+      <span className="block text-white/50 text-sm mb-1.5">{label}</span>
+      <input
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        disabled={disabled}
+        className={INPUT_CLASS}
+      />
+    </label>
+  )
+}
+
+function SelectField({
+  label,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  disabled: boolean
+}) {
+  return (
+    <label className="block">
+      <span className="block text-white/50 text-sm mb-1.5">{label}</span>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        disabled={disabled}
+        className={INPUT_CLASS}
+      >
+        <option value="Yes" className="bg-[#0a0a0f]">Yes</option>
+        <option value="No" className="bg-[#0a0a0f]">No</option>
+      </select>
+    </label>
+  )
 }
