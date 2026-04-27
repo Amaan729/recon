@@ -69,6 +69,10 @@ def get_client():
                 "agent/requirements.txt before accessing the database."
             ) from e
         url = os.environ["TURSO_DATABASE_URL"]
+        # Older libsql-client Python releases try WebSockets for `libsql://`,
+        # but this Turso host accepts HTTPS and rejects WSS handshakes.
+        if url.startswith("libsql://"):
+            url = "https://" + url.split("://", 1)[1]
         auth_token = os.environ.get("TURSO_AUTH_TOKEN")
         _client = libsql_client.create_client(
             url=url,
