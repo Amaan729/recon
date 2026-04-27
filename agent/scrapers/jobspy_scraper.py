@@ -1,7 +1,7 @@
 """
 Multi-board job scraper using the JobSpy library.
-Scrapes ZipRecruiter, Glassdoor, and LinkedIn (backup) for
-internship/co-op listings and writes qualifying jobs to Turso.
+Scrapes ZipRecruiter and Glassdoor for internship/co-op
+listings and writes qualifying jobs to Turso.
 Complements the LinkedIn guest API scraper in linkedin.py.
 """
 
@@ -27,14 +27,14 @@ SEARCH_TERMS = [
 ]
 
 SITES = [
-    "linkedin",       # backup coverage — different result set from guest API
+    # linkedin removed — handled by linkedin.py directly
     "zip_recruiter",
     "glassdoor",
 ]
 # Note: Greenhouse, Lever, Ashby, Workday are scraped by JobSpy when
 # using "google" as site with company-specific searches. For direct
-# board scraping, JobSpy hits linkedin + zip_recruiter + glassdoor,
-# which complements our LinkedIn guest API scraper.
+# board scraping, JobSpy hits zip_recruiter + glassdoor, which
+# complements our LinkedIn guest API scraper.
 
 LOCATION = "United States"
 RESULTS_WANTED = 50   # per search term
