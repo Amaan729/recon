@@ -11,8 +11,7 @@ from browser.application_agent import run_application_batch
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
-from outreach.recruiter_scraper import find_and_store_recruiters
-from outreach.email_sender import send_recruiter_email
+from outreach import email_sender, recruiter_scraper
 from outreach.linkedin_queue import queue_connection_request, queue_inmail
 from scheduler.scheduler import get_scheduler, get_job_statuses, trigger_job_now
 
@@ -107,6 +106,76 @@ async def _run_batch_background():
         await broadcast({"type": "status", "status": "idle"})
 
 
+async def _get_job_for_outreach(job_id: str) -> dict | None:
+    """Fetch one job plus any attached application resume metadata."""
+    client = db.get_client()
+    result = await client.execute(
+        """
+        SELECT
+            j.id,
+            j.title,
+            j.company,
+            j.location,
+            j.jobBoardUrl,
+            j.source,
+            j.status,
+            j.isTopPriority,
+            j.jdText,
+            j.matchScore,
+            a.id AS applicationId,
+            a.resumeVersion,
+            a.coverLetter
+        FROM Job j
+        LEFT JOIN Application a ON a.jobId = j.id
+        WHERE j.id = ?
+        LIMIT 1
+        """,
+        [job_id],
+    )
+    if not result.rows:
+        return None
+    columns = [c.name for c in result.columns]
+    return dict(zip(columns, result.rows[0]))
+
+
+def _build_connection_note(
+    first_name: str,
+    job_title: str,
+    company: str,
+) -> str:
+    note = (
+        f"Hi {first_name}, I just applied to {job_title} at {company} and "
+        f"wanted to connect. I'm a CS + Finance sophomore at ASU (4.0 GPA), "
+        f"interning at Wells Fargo this summer. Would love to stay in touch! "
+        f"— Amaan"
+    )
+    return note[:300]
+
+
+def _build_inmail_message(
+    first_name: str,
+    job_title: str,
+    company: str,
+) -> str:
+    subject = f"{job_title} Application — Amaan Sayed (ASU, 4.0 GPA)"
+    body = (
+        f"Hi {first_name}, I applied to {job_title} at {company} and wanted "
+        f"to reach out directly. I'm a CS + Finance sophomore at ASU Barrett "
+        f"Honors (4.0 GPA), joining Wells Fargo as a SWE Intern this summer. "
+        f"I've built RaftPay (distributed Go system, 7663 TPS) and ARTEMIS "
+        f"(RAG pipeline, 500+ users). Would you be open to a quick 15-minute "
+        f"call? — Amaan Sayed | asayed7@asu.edu"
+    )
+    return f"Subject: {subject}\n\n{body}"
+
+
+def _recruiter_relevance(recruiter: dict) -> int:
+    score = recruiter.get("relevanceScore")
+    if score is None:
+        score = recruiter.get("relevance_score")
+    return int(score or 0)
+
+
 # ── Agent control ────────────────────────────────────────────────────────────
 
 @app.post("/agent/start")
@@ -156,7 +225,127 @@ async def agent_stream(websocket: WebSocket):
 @app.post("/jobs/approve/{job_id}")
 async def jobs_approve(job_id: str):
     await db.update_job_status(job_id, "approved")
-    return {"status": "ok", "job_id": job_id}
+    response = {
+        "status": "ok",
+        "job_id": job_id,
+        "outreach_queued": False,
+        "recruiter_name": None,
+        "linkedin_connection_queued": False,
+        "linkedin_inmail_queued": False,
+        "email_attempted": False,
+        "email_sent": False,
+    }
+
+    job = await _get_job_for_outreach(job_id)
+    if not job:
+        print(f"[main] warning: approved job {job_id} not found for outreach")
+        return response
+
+    company = (job.get("company") or "").strip()
+    job_title = (job.get("title") or "Software Engineering Intern").strip()
+    resume_pdf_path = job.get("resumeVersion") or ""
+    if not company:
+        print(f"[main] warning: approved job {job_id} is missing company")
+        return response
+
+    try:
+        recruiters = await db.get_recruiters_for_company(company)
+        if not recruiters:
+            recruiter_ids = await recruiter_scraper.find_and_store_recruiters(company)
+            if recruiter_ids:
+                recruiters = await db.get_recruiters_for_company(company)
+
+        recruiters = sorted(
+            recruiters,
+            key=_recruiter_relevance,
+            reverse=True,
+        )
+        if not recruiters:
+            print(
+                f"[main] warning: no recruiters found for {company} after "
+                f"approving job {job_id}"
+            )
+            return response
+
+        recruiter = recruiters[0]
+        recruiter_id = recruiter.get("id")
+        recruiter_name = recruiter.get("name") or ""
+        recruiter_email = recruiter.get("email") or ""
+        first_name = recruiter_name.split()[0] if recruiter_name else "there"
+
+        response["recruiter_name"] = recruiter_name or None
+
+        if not recruiter_id:
+            print(
+                f"[main] warning: top recruiter missing id for {company} on "
+                f"job {job_id}"
+            )
+            return response
+
+        try:
+            connection_note = _build_connection_note(first_name, job_title, company)
+            outreach_id = await db.queue_outreach(
+                recruiter_id=recruiter_id,
+                channel="linkedin_connection",
+                application_id=None,
+                message_text=connection_note,
+            )
+            response["linkedin_connection_queued"] = bool(outreach_id)
+        except Exception as e:
+            print(
+                f"[main] warning: failed to queue LinkedIn connection for "
+                f"{recruiter_name}: {e}"
+            )
+
+        try:
+            inmail_text = _build_inmail_message(first_name, job_title, company)
+            outreach_id = await db.queue_outreach(
+                recruiter_id=recruiter_id,
+                channel="linkedin_inmail",
+                application_id=None,
+                message_text=inmail_text,
+            )
+            response["linkedin_inmail_queued"] = bool(outreach_id)
+        except Exception as e:
+            print(
+                f"[main] warning: failed to queue LinkedIn InMail for "
+                f"{recruiter_name}: {e}"
+            )
+
+        if recruiter_email and "@" in recruiter_email:
+            response["email_attempted"] = True
+            try:
+                response["email_sent"] = await email_sender.send_recruiter_email(
+                    recruiter_id=recruiter_id,
+                    recruiter_name=recruiter_name,
+                    recruiter_email=recruiter_email,
+                    company=company,
+                    role=job_title,
+                    resume_pdf_path=resume_pdf_path,
+                    application_id=None,
+                )
+            except Exception as e:
+                print(
+                    f"[main] warning: failed to send recruiter email for "
+                    f"{recruiter_name}: {e}"
+                )
+        else:
+            print(
+                f"[main] warning: recruiter email missing for {recruiter_name} "
+                f"at {company}; skipping email"
+            )
+
+        response["outreach_queued"] = any(
+            (
+                response["linkedin_connection_queued"],
+                response["linkedin_inmail_queued"],
+                response["email_attempted"],
+            )
+        )
+    except Exception as e:
+        print(f"[main] warning: outreach trigger failed for job {job_id}: {e}")
+
+    return response
 
 
 @app.post("/jobs/skip/{job_id}")
@@ -198,7 +387,7 @@ async def run_batch():
 @app.post("/recruiters/find/{company}")
 async def find_recruiters(company: str):
     """Trigger recruiter search for a company. Called after approving a job."""
-    recruiter_ids = await find_and_store_recruiters(company)
+    recruiter_ids = await recruiter_scraper.find_and_store_recruiters(company)
     return {
         "status": "ok",
         "company": company,
@@ -225,7 +414,7 @@ async def send_email_outreach(recruiter_id: str, body: dict):
     if not recruiter or not recruiter.get("email"):
         return {"status": "error", "message": "Recruiter or email not found"}
 
-    success = await send_recruiter_email(
+    success = await email_sender.send_recruiter_email(
         recruiter_id=recruiter_id,
         recruiter_name=recruiter["name"],
         recruiter_email=recruiter["email"],
