@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import db
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from browser.application_agent import run_application_batch
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -300,6 +300,17 @@ async def agent_status():
         "log": _action_log[-20:],
         "lastRunAt": _agent_last_run_at,
     }
+
+
+@app.get("/candidate")
+async def candidate_profile():
+    return await db.get_candidate_profile()
+
+
+@app.patch("/candidate")
+async def update_candidate_profile(request: Request):
+    body = await request.json()
+    return await db.update_candidate_profile(body)
 
 
 @app.websocket("/agent/stream")

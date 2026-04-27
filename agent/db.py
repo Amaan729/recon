@@ -8,20 +8,66 @@ Job, Application, Recruiter, and RecruiterOutreach records.
 import os
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
-import libsql_client
 from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    import libsql_client
 
 load_dotenv()
 
-_client: libsql_client.Client | None = None
+_client = None
+
+_DEFAULT_CANDIDATE_PROFILE = {
+    "firstName": "Amaan",
+    "lastName": "Sayed",
+    "email": "asayed7@asu.edu",
+    "phone": "",
+    "university": "Arizona State University",
+    "major": "Computer Science and Finance",
+    "gpa": "4.0",
+    "graduationYear": "2028",
+    "graduationMonth": "May",
+    "linkedinUrl": "https://www.linkedin.com/in/amaansayed",
+    "githubUrl": "https://github.com/Amaan729",
+    "portfolioUrl": "",
+    "location": "Tempe, Arizona",
+    "workAuthorization": "Yes",
+    "requiresSponsorship": "No",
+}
+
+_CANDIDATE_PROFILE_FIELDS = [
+    "firstName",
+    "lastName",
+    "email",
+    "phone",
+    "university",
+    "major",
+    "gpa",
+    "graduationYear",
+    "graduationMonth",
+    "linkedinUrl",
+    "githubUrl",
+    "portfolioUrl",
+    "location",
+    "workAuthorization",
+    "requiresSponsorship",
+]
 
 
-def get_client() -> libsql_client.Client:
+def get_client():
     """Return a singleton libSQL client connected to Turso."""
     global _client
     if _client is None:
+        try:
+            import libsql_client
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                "libsql_client is required to use agent.db; install "
+                "agent/requirements.txt before accessing the database."
+            ) from e
         url = os.environ["TURSO_DATABASE_URL"]
         auth_token = os.environ.get("TURSO_AUTH_TOKEN")
         _client = libsql_client.create_client(
@@ -301,6 +347,80 @@ async def update_ats_slug_scraped(slug: str, ats_board: str) -> None:
         "UPDATE AtsSlugs SET lastScrapedAt = ? WHERE slug = ? AND atsBoard = ?",
         [datetime.utcnow().isoformat(), slug, ats_board],
     )
+
+
+async def _seed_candidate_profile() -> None:
+    """Insert the singleton candidate profile row if missing."""
+    client = get_client()
+    candidate_id = _cuid()
+    await client.execute(
+        """
+        INSERT INTO CandidateProfile
+          (id, firstName, lastName, email, phone, university, major,
+           gpa, graduationYear, graduationMonth, linkedinUrl, githubUrl,
+           portfolioUrl, location, workAuthorization,
+           requiresSponsorship, updatedAt, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                datetime('now'), datetime('now'))
+        """,
+        [
+            candidate_id,
+            _DEFAULT_CANDIDATE_PROFILE["firstName"],
+            _DEFAULT_CANDIDATE_PROFILE["lastName"],
+            _DEFAULT_CANDIDATE_PROFILE["email"],
+            _DEFAULT_CANDIDATE_PROFILE["phone"],
+            _DEFAULT_CANDIDATE_PROFILE["university"],
+            _DEFAULT_CANDIDATE_PROFILE["major"],
+            _DEFAULT_CANDIDATE_PROFILE["gpa"],
+            _DEFAULT_CANDIDATE_PROFILE["graduationYear"],
+            _DEFAULT_CANDIDATE_PROFILE["graduationMonth"],
+            _DEFAULT_CANDIDATE_PROFILE["linkedinUrl"],
+            _DEFAULT_CANDIDATE_PROFILE["githubUrl"],
+            _DEFAULT_CANDIDATE_PROFILE["portfolioUrl"],
+            _DEFAULT_CANDIDATE_PROFILE["location"],
+            _DEFAULT_CANDIDATE_PROFILE["workAuthorization"],
+            _DEFAULT_CANDIDATE_PROFILE["requiresSponsorship"],
+        ],
+    )
+
+
+async def get_candidate_profile() -> dict:
+    """Return the singleton candidate profile, seeding it if missing."""
+    client = get_client()
+    result = await client.execute(
+        "SELECT * FROM CandidateProfile LIMIT 1"
+    )
+    if not result.rows:
+        await _seed_candidate_profile()
+        result = await client.execute(
+            "SELECT * FROM CandidateProfile LIMIT 1"
+        )
+    columns = [
+        c.name if hasattr(c, "name") else str(c)
+        for c in result.columns
+    ]
+    return dict(zip(columns, result.rows[0]))
+
+
+async def update_candidate_profile(fields: dict) -> dict:
+    """Update allowed candidate profile fields and return the new row."""
+    profile = await get_candidate_profile()
+    valid_updates = {
+        key: value
+        for key, value in fields.items()
+        if key in _CANDIDATE_PROFILE_FIELDS
+    }
+
+    assignments = [f"{key} = ?" for key in valid_updates]
+    values = [valid_updates[key] for key in valid_updates]
+    assignments.append("updatedAt = datetime('now')")
+
+    client = get_client()
+    await client.execute(
+        f"UPDATE CandidateProfile SET {', '.join(assignments)} WHERE id = ?",
+        [*values, profile["id"]],
+    )
+    return await get_candidate_profile()
 
 
 def _cuid() -> str:

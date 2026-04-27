@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS "CandidateProfile" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "firstName" TEXT NOT NULL DEFAULT 'Amaan',
+    "lastName" TEXT NOT NULL DEFAULT 'Sayed',
+    "email" TEXT NOT NULL DEFAULT 'asayed7@asu.edu',
+    "phone" TEXT NOT NULL DEFAULT '',
+    "university" TEXT NOT NULL DEFAULT 'Arizona State University',
+    "major" TEXT NOT NULL DEFAULT 'Computer Science and Finance',
+    "gpa" TEXT NOT NULL DEFAULT '4.0',
+    "graduationYear" TEXT NOT NULL DEFAULT '2028',
+    "graduationMonth" TEXT NOT NULL DEFAULT 'May',
+    "linkedinUrl" TEXT NOT NULL DEFAULT 'https://www.linkedin.com/in/amaansayed',
+    "githubUrl" TEXT NOT NULL DEFAULT 'https://github.com/Amaan729',
+    "portfolioUrl" TEXT NOT NULL DEFAULT '',
+    "location" TEXT NOT NULL DEFAULT 'Tempe, Arizona',
+    "workAuthorization" TEXT NOT NULL DEFAULT 'Yes',
+    "requiresSponsorship" TEXT NOT NULL DEFAULT 'No',
+    "updatedAt" DATETIME NOT NULL,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

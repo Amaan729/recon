@@ -27,10 +27,11 @@ except ImportError:
     twocaptcha = None
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import db
 
 logger = logging.getLogger(__name__)
 
-CANDIDATE = {
+CANDIDATE_FALLBACK = {
     "first_name": "Amaan",
     "last_name": "Sayed",
     "email": "asayed7@asu.edu",
@@ -75,6 +76,49 @@ class ApplicationResult:
     error: str = ""
     unknown_fields: list[str] = field(default_factory=list)
     application_url: str = ""
+
+
+async def get_candidate() -> dict:
+    """Fetch candidate profile from DB and map it to browser-use fields."""
+    profile = await db.get_candidate_profile()
+    return {
+        "first_name": profile.get("firstName", CANDIDATE_FALLBACK["first_name"]),
+        "last_name": profile.get("lastName", CANDIDATE_FALLBACK["last_name"]),
+        "email": profile.get("email", CANDIDATE_FALLBACK["email"]),
+        "phone": profile.get("phone", CANDIDATE_FALLBACK["phone"]),
+        "university": profile.get("university", CANDIDATE_FALLBACK["university"]),
+        "major": profile.get("major", CANDIDATE_FALLBACK["major"]),
+        "gpa": profile.get("gpa", CANDIDATE_FALLBACK["gpa"]),
+        "graduation_year": profile.get(
+            "graduationYear",
+            CANDIDATE_FALLBACK["graduation_year"],
+        ),
+        "graduation_month": profile.get(
+            "graduationMonth",
+            CANDIDATE_FALLBACK["graduation_month"],
+        ),
+        "linkedin_url": profile.get(
+            "linkedinUrl",
+            CANDIDATE_FALLBACK["linkedin_url"],
+        ),
+        "github_url": profile.get(
+            "githubUrl",
+            CANDIDATE_FALLBACK["github_url"],
+        ),
+        "portfolio_url": profile.get(
+            "portfolioUrl",
+            CANDIDATE_FALLBACK["portfolio_url"],
+        ),
+        "location": profile.get("location", CANDIDATE_FALLBACK["location"]),
+        "work_authorization": profile.get(
+            "workAuthorization",
+            CANDIDATE_FALLBACK["work_authorization"],
+        ),
+        "requires_sponsorship": profile.get(
+            "requiresSponsorship",
+            CANDIDATE_FALLBACK["requires_sponsorship"],
+        ),
+    }
 
 
 # ── Gmail verification helper ─────────────────────────────────────
@@ -398,6 +442,10 @@ async def apply_to_job(
         llm = _get_llm()
         password = os.environ.get(PORTAL_PASSWORD_ENV, "")
         twocaptcha_api_key = os.environ.get("TWOCAPTCHA_API_KEY", "").strip()
+        try:
+            candidate = await get_candidate()
+        except Exception:
+            candidate = CANDIDATE_FALLBACK
 
         task = _build_task_prompt(
             job_url=job_url,
@@ -406,6 +454,7 @@ async def apply_to_job(
             resume_pdf_path=resume_pdf_path,
             cover_letter=cover_letter,
             password=password,
+            candidate=candidate,
         )
 
         async with AsyncCamoufox(headless=True, geoip=True) as browser:
@@ -443,12 +492,12 @@ async def apply_to_job(
                     success = True
 
             if success:
-                import db
                 await db.update_job_status(job_id, "applied")
                 app_id = await _create_application_record(
                     job_id=job_id,
                     resume_pdf_path=resume_pdf_path,
                     cover_letter=cover_letter,
+                    candidate=candidate,
                 )
                 print(f"  Applied successfully — app_id: {app_id}")
                 return ApplicationResult(
@@ -458,7 +507,6 @@ async def apply_to_job(
                     application_url=job_url,
                 )
             else:
-                import db
                 await db.update_job_status(job_id, "failed")
                 return ApplicationResult(
                     job_id=job_id,
@@ -469,7 +517,6 @@ async def apply_to_job(
 
     except Exception as e:
         print(f"  Application failed: {e}")
-        import db
         await db.update_job_status(job_id, "failed")
         return ApplicationResult(
             job_id=job_id,
@@ -486,10 +533,11 @@ def _build_task_prompt(
     resume_pdf_path: str,
     cover_letter: str,
     password: str,
+    candidate: dict,
 ) -> str:
     """Build the natural language task prompt for browser-use."""
     candidate_info = "\n".join(
-        f"- {k}: {v}" for k, v in CANDIDATE.items() if v
+        f"- {k}: {v}" for k, v in candidate.items() if v
     )
 
     return f"""
@@ -508,15 +556,15 @@ COVER LETTER (paste if field exists, skip if not required):
 INSTRUCTIONS:
 1. Navigate to {job_url}
 2. If a "Sign in with Google" or "Continue with Google" button
-   exists, click it and sign in with asayed7@asu.edu
+   exists, click it and sign in with {candidate["email"]}
 3. If no Google sign-in, create a new account with:
-   email: asayed7@asu.edu, password: {password}
+   email: {candidate["email"]}, password: {password}
 4. Fill all required fields using the candidate information above
 5. For the resume field, upload the file at: {resume_pdf_path}
-6. For work authorization questions, answer "Yes"
-7. For sponsorship questions, answer "No"
-8. For GPA fields, enter: 4.0
-9. For graduation date, enter: May 2028
+6. For work authorization questions, answer "{candidate["work_authorization"]}"
+7. For sponsorship questions, answer "{candidate["requires_sponsorship"]}"
+8. For GPA fields, enter: {candidate["gpa"]}
+9. For graduation date, enter: {candidate["graduation_month"]} {candidate["graduation_year"]}
 10. Skip optional diversity, gender, ethnicity fields
 11. If asked for SAT/ACT scores or SSN, stop and report:
     "UNKNOWN_FIELD: <field name>"
@@ -538,9 +586,9 @@ async def _create_application_record(
     job_id: str,
     resume_pdf_path: str,
     cover_letter: str,
+    candidate: dict,
 ) -> str:
     """Create an Application record in Turso after successful apply."""
-    import db
     client = db.get_client()
     app_id = db._cuid()
     await client.execute(
@@ -554,7 +602,7 @@ async def _create_application_record(
         [
             app_id,
             job_id,
-            CANDIDATE["email"],
+            candidate["email"],
             resume_pdf_path,
             cover_letter[:2000] if cover_letter else None,
         ],

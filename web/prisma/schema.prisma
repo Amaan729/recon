@@ -226,3 +226,24 @@ model AtsSlugs {
 
   @@unique([slug, atsBoard])
 }
+
+model CandidateProfile {
+  id                  String   @id @default(cuid())
+  firstName           String   @default("Amaan")
+  lastName            String   @default("Sayed")
+  email               String   @default("asayed7@asu.edu")
+  phone               String   @default("")
+  university          String   @default("Arizona State University")
+  major               String   @default("Computer Science and Finance")
+  gpa                 String   @default("4.0")
+  graduationYear      String   @default("2028")
+  graduationMonth     String   @default("May")
+  linkedinUrl         String   @default("https://www.linkedin.com/in/amaansayed")
+  githubUrl           String   @default("https://github.com/Amaan729")
+  portfolioUrl        String   @default("")
+  location            String   @default("Tempe, Arizona")
+  workAuthorization   String   @default("Yes")
+  requiresSponsorship String   @default("No")
+  updatedAt           DateTime @updatedAt
+  createdAt           DateTime @default(now())
+}
