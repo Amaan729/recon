@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useSession, signOut } from "next-auth/react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 type NavItem = {
   href: string
@@ -57,15 +57,62 @@ const SETTINGS_ITEM: NavItem = {
   icon: "◐",
 }
 
+const AGENT_URL = (process.env.NEXT_PUBLIC_AGENT_URL ?? "http://localhost:8000").replace(/\/$/, "")
+
+function formatBadgeCount(count: number): string {
+  return count > 99 ? "99+" : String(count)
+}
+
 export default function Sidebar() {
   const pathname = usePathname()
   const { data: session } = useSession()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [pendingCount, setPendingCount] = useState(0)
+  const [queuedOutreachCount, setQueuedOutreachCount] = useState(0)
 
   const isActive = (href: string) => {
     if (href === "/dashboard/jobs") return pathname === href
     return pathname.startsWith(href)
   }
+
+  useEffect(() => {
+    let cancelled = false
+
+    const fetchCounts = async () => {
+      try {
+        const [jobsRes, outreachRes] = await Promise.all([
+          fetch(`${AGENT_URL}/jobs/queue`, { cache: "no-store" }),
+          fetch(`${AGENT_URL}/outreach/queued`, { cache: "no-store" }),
+        ])
+
+        if (jobsRes.ok) {
+          const data = await jobsRes.json() as { jobs?: unknown[] }
+          if (!cancelled) {
+            setPendingCount(Array.isArray(data.jobs) ? data.jobs.length : 0)
+          }
+        }
+
+        if (outreachRes.ok) {
+          const data = await outreachRes.json() as { items?: unknown[] }
+          if (!cancelled) {
+            setQueuedOutreachCount(Array.isArray(data.items) ? data.items.length : 0)
+          }
+        }
+      } catch {
+        // Keep the last known counts on silent failure.
+      }
+    }
+
+    void fetchCounts()
+    const t = window.setInterval(() => {
+      void fetchCounts()
+    }, 60_000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(t)
+    }
+  }, [])
 
   const sidebarContent = (
     <div className="flex flex-col h-full">
@@ -88,6 +135,8 @@ export default function Sidebar() {
       <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
         {NAV_ITEMS.map(({ href, label, icon }) => {
           const active = isActive(href)
+          const isJobsItem = href === "/dashboard/jobs"
+          const isRecruitersItem = href === "/dashboard/recruiters"
           return (
             <Link
               key={href}
@@ -109,7 +158,19 @@ export default function Sidebar() {
               >
                 {icon}
               </span>
-              <span className="font-medium truncate">{label}</span>
+              <span className="inline-flex items-center gap-2 min-w-0 flex-1">
+                <span className="font-medium truncate">{label}</span>
+                {isJobsItem && pendingCount > 0 && (
+                  <span className="shrink-0 rounded-full text-xs font-medium px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    {formatBadgeCount(pendingCount)}
+                  </span>
+                )}
+                {isRecruitersItem && queuedOutreachCount > 0 && (
+                  <span className="shrink-0 rounded-full text-xs font-medium px-2 py-0.5 bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                    {formatBadgeCount(queuedOutreachCount)}
+                  </span>
+                )}
+              </span>
             </Link>
           )
         })}
