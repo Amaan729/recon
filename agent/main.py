@@ -68,13 +68,63 @@ async def broadcast(message: dict) -> None:
         _active_websockets.remove(ws)
 
 
+def _parse_db_datetime(value: str | None) -> datetime | None:
+    """Parse DB timestamps into UTC-aware datetimes."""
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+async def _get_ready_retry_jobs() -> list[dict]:
+    """Return retry_queued jobs whose retry delay has elapsed."""
+    retry_jobs = await db.get_retry_queued_jobs()
+    ready_jobs = []
+    now = datetime.now(timezone.utc)
+
+    for job in retry_jobs:
+        retry_count = int(job.get("retryCount") or 0)
+        updated_at = _parse_db_datetime(job.get("updatedAt"))
+        delay_seconds = db.get_retry_delay_seconds(retry_count)
+
+        if updated_at is None:
+            ready_jobs.append(job)
+            continue
+
+        elapsed_seconds = (now - updated_at).total_seconds()
+        if elapsed_seconds >= delay_seconds:
+            ready_jobs.append(job)
+
+    return ready_jobs
+
+
+async def _get_application_batch_jobs() -> tuple[list[dict], list[dict], list[dict]]:
+    """Return approved jobs, ready retry jobs, and the combined batch list."""
+    approved_jobs = await db.get_approved_jobs()
+    retry_jobs = await _get_ready_retry_jobs()
+    return approved_jobs, retry_jobs, [*approved_jobs, *retry_jobs]
+
+
 async def _run_batch_background():
     global _agent_last_run_at, _agent_status
     had_error = False
     try:
-        approved_jobs = await db.get_approved_jobs()
-        if not approved_jobs:
-            await broadcast({"type": "action", "message": "No approved jobs found"})
+        approved_jobs, retry_jobs, jobs_to_process = await _get_application_batch_jobs()
+        if not jobs_to_process:
+            await broadcast({
+                "type": "action",
+                "message": "No approved or due retry jobs found",
+            })
             _agent_status = "idle"
             await broadcast({"type": "status", "status": "idle"})
             return
@@ -87,7 +137,7 @@ async def _run_batch_background():
             }))
 
         results = await run_application_batch(
-            approved_jobs,
+            jobs_to_process,
             screenshot_callback=screenshot_cb,
         )
         applied = sum(1 for r in results if r.success)
@@ -100,7 +150,10 @@ async def _run_batch_background():
         })
         await broadcast({
             "type": "action",
-            "message": f"Batch complete — {applied} applied, {failed} failed",
+            "message": (
+                f"Batch complete — {applied} applied, {failed} failed"
+                f" ({len(approved_jobs)} approved, {len(retry_jobs)} retries)"
+            ),
         })
     except Exception as e:
         had_error = True
@@ -471,6 +524,12 @@ async def jobs_queue():
     return {"jobs": jobs}
 
 
+@app.get("/jobs/retry-queue")
+async def jobs_retry_queue():
+    jobs = await db.get_retry_queued_jobs()
+    return {"jobs": jobs}
+
+
 @app.get("/dashboard/stats")
 async def dashboard_stats():
     return await _get_dashboard_stats()
@@ -487,16 +546,18 @@ async def recent_applications():
 @app.post("/agent/run-batch")
 async def run_batch():
     """Fetch all approved jobs and run application batch."""
-    approved_jobs = await db.get_approved_jobs()
-    if not approved_jobs:
-        return {"status": "ok", "message": "No approved jobs"}
-    results = await run_application_batch(approved_jobs)
+    approved_jobs, retry_jobs, jobs_to_process = await _get_application_batch_jobs()
+    if not jobs_to_process:
+        return {"status": "ok", "message": "No approved or due retry jobs"}
+    results = await run_application_batch(jobs_to_process)
     applied = sum(1 for r in results if r.success)
     failed = sum(1 for r in results if not r.success)
     return {
         "status": "ok",
         "applied": applied,
         "failed": failed,
+        "approved_jobs": len(approved_jobs),
+        "retry_jobs": len(retry_jobs),
         "results": [
             {"job_id": r.job_id, "status": r.status, "error": r.error}
             for r in results

@@ -222,6 +222,21 @@ async def compile_one_page(tex_content: str) -> tuple[bytes, str]:
 
 # ── Save output ───────────────────────────────────────────────────
 
+async def compile_resume(tex_content: str, output_dir: str) -> str:
+    """
+    Compile tailored .tex, enforce one-page output, and save artifacts.
+    Returns the saved PDF path.
+    """
+    pdf_bytes, final_tex = await compile_one_page(tex_content)
+    saved = await save_resume_version(
+        job_id=Path(output_dir).name,
+        pdf_bytes=pdf_bytes,
+        final_tex=final_tex,
+        output_dir=Path(output_dir),
+    )
+    return saved["pdf_path"]
+
+
 async def save_resume_version(
     job_id: str,
     pdf_bytes: bytes,

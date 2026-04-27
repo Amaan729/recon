@@ -166,13 +166,52 @@ async def get_pending_jobs() -> list[dict]:
 
 async def update_job_status(job_id: str, status: str) -> None:
     """Update a job's status. Valid values: pending | approved |
-    skipped | applied | failed."""
+    skipped | applied | failed | retry_queued."""
     client = get_client()
     await client.execute(
         "UPDATE Job SET status = ?, updatedAt = datetime('now') "
         "WHERE id = ?",
         [status, job_id],
     )
+
+
+async def mark_job_for_retry(job_id: str) -> bool:
+    """
+    Move a failed job into retry_queued until the retry cap is reached.
+    Returns True when re-queued, False when permanently failed.
+    """
+    client = get_client()
+    result = await client.execute(
+        "SELECT retryCount FROM Job WHERE id = ?",
+        [job_id],
+    )
+    if not result.rows:
+        return False
+
+    retry_count = int(result.rows[0][0] or 0)
+    if retry_count >= 3:
+        await client.execute(
+            "UPDATE Job SET status = 'failed', updatedAt = datetime('now') "
+            "WHERE id = ?",
+            [job_id],
+        )
+        return False
+
+    await client.execute(
+        "UPDATE Job SET status = 'retry_queued', retryCount = retryCount + 1, "
+        "updatedAt = datetime('now') WHERE id = ?",
+        [job_id],
+    )
+    return True
+
+
+def get_retry_delay_seconds(retry_count: int) -> int:
+    """Return the retry backoff delay in seconds for a given retry count."""
+    if retry_count <= 1:
+        return 300
+    if retry_count == 2:
+        return 900
+    return 3600
 
 
 async def upsert_recruiter(
@@ -242,11 +281,32 @@ async def get_approved_jobs() -> list[dict]:
     client = get_client()
     result = await client.execute(
         """
-        SELECT id, title, company, location, jobBoardUrl,
-               isTopPriority
-        FROM Job
-        WHERE status = 'approved'
-        ORDER BY isTopPriority DESC, createdAt ASC
+        SELECT j.id, j.title, j.company, j.location, j.jobBoardUrl,
+               j.isTopPriority, j.jdText,
+               a.resumeVersion AS resumePdfPath,
+               a.coverLetter
+        FROM Job j
+        LEFT JOIN Application a ON a.jobId = j.id
+        WHERE j.status = 'approved'
+        ORDER BY j.isTopPriority DESC, j.createdAt ASC
+        """
+    )
+    return [dict(zip([c.name for c in result.columns], row))
+            for row in result.rows]
+
+
+async def get_retry_queued_jobs() -> list[dict]:
+    """Return retry-queued jobs ordered by retryCount ASC then createdAt ASC."""
+    client = get_client()
+    result = await client.execute(
+        """
+        SELECT j.id, j.title, j.company, j.location, j.jobBoardUrl,
+               j.isTopPriority, j.jdText, j.retryCount, j.updatedAt,
+               j.status, a.resumeVersion AS resumePdfPath, a.coverLetter
+        FROM Job j
+        LEFT JOIN Application a ON a.jobId = j.id
+        WHERE j.status = 'retry_queued'
+        ORDER BY j.retryCount ASC, j.createdAt ASC
         """
     )
     return [dict(zip([c.name for c in result.columns], row))

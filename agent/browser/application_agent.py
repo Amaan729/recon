@@ -403,6 +403,23 @@ async def _get_active_page(browser, fallback_page=None):
     return fallback_page
 
 
+async def _handle_failed_application(job_id: str, is_retry: bool) -> None:
+    """Queue a failed application for retry or mark it permanently failed."""
+    queued = await db.mark_job_for_retry(job_id)
+    if queued:
+        logger.warning(
+            "Application failed for job %s and was queued for retry%s",
+            job_id,
+            " (retry attempt)" if is_retry else "",
+        )
+    else:
+        logger.warning(
+            "Application failed for job %s and was marked failed permanently%s",
+            job_id,
+            " (retry attempt)" if is_retry else "",
+        )
+
+
 # ── Main application agent ────────────────────────────────────────
 
 async def apply_to_job(
@@ -412,6 +429,7 @@ async def apply_to_job(
     job_title: str,
     resume_pdf_path: str,
     cover_letter: str = "",
+    is_retry: bool = False,
     screenshot_callback: Callable[[bytes], None] | None = None,
     ask_user_callback: Callable[[str], str] | None = None,
 ) -> ApplicationResult:
@@ -507,7 +525,7 @@ async def apply_to_job(
                     application_url=job_url,
                 )
             else:
-                await db.update_job_status(job_id, "failed")
+                await _handle_failed_application(job_id, is_retry)
                 return ApplicationResult(
                     job_id=job_id,
                     success=False,
@@ -517,7 +535,7 @@ async def apply_to_job(
 
     except Exception as e:
         print(f"  Application failed: {e}")
-        await db.update_job_status(job_id, "failed")
+        await _handle_failed_application(job_id, is_retry)
         return ApplicationResult(
             job_id=job_id,
             success=False,
@@ -619,19 +637,62 @@ async def run_application_batch(
     """
     Process a list of approved jobs sequentially.
     Each job dict must have: id, jobBoardUrl, company, title,
-    resumePdfPath, coverLetter fields.
+    resumePdfPath, coverLetter, jdText fields.
     Runs jobs one at a time to avoid detection.
     """
+    try:
+        from resume import compile as resume_compile
+        from resume import tailor as resume_tailor
+    except Exception as exc:
+        logger.warning("Resume pipeline imports unavailable: %s", exc)
+        resume_compile = None
+        resume_tailor = None
+
     results = []
     for job in jobs:
         print(f"\nProcessing: {job.get('company')} - {job.get('title')}")
+        resume_pdf_path = job.get("resumePdfPath", "") or ""
+        cover_letter = job.get("coverLetter", "") or ""
+        jd_text = (job.get("jdText") or "").strip()
+
+        if jd_text and resume_tailor is not None and resume_compile is not None:
+            try:
+                tailoring_result = await resume_tailor.tailor_resume(
+                    jd_text,
+                    job.get("title", "Unknown"),
+                    job.get("company", "Unknown"),
+                )
+                output_dir = os.path.expanduser(f"~/recon_resumes/{job['id']}")
+                os.makedirs(output_dir, exist_ok=True)
+                resume_pdf_path = await resume_compile.compile_resume(
+                    tailoring_result.tailored_tex,
+                    output_dir,
+                )
+                cover_letter = tailoring_result.cover_letter
+                logger.info(
+                    "Tailored resume compiled for job %s at %s",
+                    job["id"],
+                    resume_pdf_path,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Resume tailoring/compilation failed for %s (%s): %s",
+                    job.get("company", "Unknown"),
+                    job.get("id"),
+                    exc,
+                )
+
         result = await apply_to_job(
             job_id=job["id"],
             job_url=job["jobBoardUrl"],
             company=job.get("company", "Unknown"),
             job_title=job.get("title", "Unknown"),
-            resume_pdf_path=job.get("resumePdfPath", ""),
-            cover_letter=job.get("coverLetter", ""),
+            resume_pdf_path=resume_pdf_path,
+            cover_letter=cover_letter,
+            is_retry=(
+                job.get("status") == "retry_queued"
+                or int(job.get("retryCount") or 0) > 0
+            ),
             screenshot_callback=screenshot_callback,
         )
         results.append(result)

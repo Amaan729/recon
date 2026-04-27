@@ -161,10 +161,11 @@ model Job {
   source        String
   // linkedin | greenhouse | lever | ashby | workday | handshake | simplify | instagram
   status        String       @default("pending")
-  // pending | approved | skipped | applied | failed
+  // pending | approved | skipped | applied | retry_queued | failed
   isTopPriority Boolean      @default(false)
   jdText        String?
   matchScore    Int?
+  retryCount    Int          @default(0)
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
   application   Application?
