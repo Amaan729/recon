@@ -248,3 +248,13 @@ model CandidateProfile {
   updatedAt           DateTime @updatedAt
   createdAt           DateTime @default(now())
 }
+
+model InstagramPost {
+  id               String   @id @default(cuid())
+  postUrl          String   @unique
+  caption          String?
+  companyMentioned String?
+  postedAt         DateTime?
+  scrapedAt        DateTime @default(now())
+  imageUrl         String?
+}

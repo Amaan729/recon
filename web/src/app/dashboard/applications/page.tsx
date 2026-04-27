@@ -31,6 +31,11 @@ type Application = {
   recruiterOutreach: RecruiterOutreach[]
 }
 
+type ApplicationsResponse = {
+  applications: Application[]
+  nextCursor: string | null
+}
+
 type AppFilter = "all" | "submitted" | "pending_review" | "failed"
 
 function timeAgo(dateStr: string): string {
@@ -93,15 +98,18 @@ const OUTREACH_STATUS_STYLE: Record<string, string> = {
 export default function ApplicationsPage() {
   const [applications, setApplications] = useState<Application[]>([])
   const [loading, setLoading]           = useState(true)
+  const [nextCursor, setNextCursor]     = useState<string | null>(null)
+  const [loadingMore, setLoadingMore]   = useState(false)
   const [filter, setFilter]             = useState<AppFilter>("all")
   const [expanded, setExpanded]         = useState<string | null>(null)
 
   const fetchApplications = useCallback(async () => {
     try {
-      const res = await fetch("/api/applications")
+      const res = await fetch("/api/applications?limit=20")
       if (res.ok) {
-        const data = await res.json() as { applications: Application[] }
+        const data = await res.json() as ApplicationsResponse
         setApplications(data.applications)
+        setNextCursor(data.nextCursor)
       }
     } finally {
       setLoading(false)
@@ -123,6 +131,24 @@ export default function ApplicationsPage() {
     submitted:      applications.filter(a => a.status === "submitted").length,
     pending_review: applications.filter(a => a.status === "pending_review").length,
     failed:         applications.filter(a => a.status === "failed").length,
+  }
+
+  const handleLoadMore = async () => {
+    if (!nextCursor || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const params = new URLSearchParams({
+        limit: "20",
+        cursor: nextCursor,
+      })
+      const res = await fetch(`/api/applications?${params.toString()}`)
+      if (!res.ok) throw new Error("load more failed")
+      const data = await res.json() as ApplicationsResponse
+      setApplications(prev => [...prev, ...data.applications])
+      setNextCursor(data.nextCursor)
+    } finally {
+      setLoadingMore(false)
+    }
   }
 
   return (
@@ -209,6 +235,21 @@ export default function ApplicationsPage() {
                 onToggle={() => setExpanded(expanded === app.id ? null : app.id)}
               />
             ))}
+          </div>
+        )}
+
+        {!loading && applications.length > 0 && nextCursor !== null && (
+          <div className="flex justify-center pt-5">
+            <button
+              onClick={handleLoadMore}
+              disabled={loadingMore}
+              className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/6 px-4 py-2 text-sm font-medium text-white/75 backdrop-blur-xl transition-all hover:border-white/24 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loadingMore && (
+                <span className="h-4 w-4 rounded-full border-2 border-white/25 border-t-white/80 animate-spin" />
+              )}
+              {loadingMore ? "Loading…" : "Load more"}
+            </button>
           </div>
         )}
       </div>

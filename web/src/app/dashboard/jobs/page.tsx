@@ -16,6 +16,11 @@ type Job = {
   createdAt: string
 }
 
+type JobsResponse = {
+  jobs: Job[]
+  nextCursor: string | null
+}
+
 type Filter = "all" | "priority" | "linkedin" | "jobspy" | "applied" | "skipped"
 
 function timeAgo(dateStr: string): string {
@@ -54,15 +59,18 @@ const FILTERS: { id: Filter; label: string }[] = [
 export default function JobsPage() {
   const [jobs, setJobs]       = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [removing, setRemoving] = useState<Set<string>>(new Set())
   const [filter, setFilter]   = useState<Filter>("all")
 
   const fetchJobs = useCallback(async () => {
     try {
-      const res = await fetch("/api/jobs/queue")
+      const res = await fetch("/api/jobs/queue?limit=20")
       if (res.ok) {
-        const data = await res.json() as { jobs: Job[] }
+        const data = await res.json() as JobsResponse
         setJobs(data.jobs)
+        setNextCursor(data.nextCursor)
       }
     } finally {
       setLoading(false)
@@ -143,6 +151,24 @@ export default function JobsPage() {
     } else {
       toast.warning(`${batch.length - failed} approved, ${failed} failed`)
       fetchJobs()
+    }
+  }
+
+  const handleLoadMore = async () => {
+    if (!nextCursor || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const params = new URLSearchParams({
+        limit: "20",
+        cursor: nextCursor,
+      })
+      const res = await fetch(`/api/jobs/queue?${params.toString()}`)
+      if (!res.ok) throw new Error("load more failed")
+      const data = await res.json() as JobsResponse
+      setJobs(prev => [...prev, ...data.jobs])
+      setNextCursor(data.nextCursor)
+    } finally {
+      setLoadingMore(false)
     }
   }
 
@@ -227,6 +253,21 @@ export default function JobsPage() {
               onSkip={handleSkip}
             />
           ))}
+        </div>
+      )}
+
+      {!loading && jobs.length > 0 && nextCursor !== null && (
+        <div className="flex justify-center pt-5">
+          <button
+            onClick={handleLoadMore}
+            disabled={loadingMore}
+            className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/6 px-4 py-2 text-sm font-medium text-white/75 backdrop-blur-xl transition-all hover:border-white/24 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {loadingMore && (
+              <span className="h-4 w-4 rounded-full border-2 border-white/25 border-t-white/80 animate-spin" />
+            )}
+            {loadingMore ? "Loading…" : "Load more"}
+          </button>
         </div>
       )}
     </div>

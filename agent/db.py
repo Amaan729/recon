@@ -357,6 +357,47 @@ async def get_recruiters_for_company(company: str) -> list[dict]:
             for row in result.rows]
 
 
+async def get_instagram_posts(
+    limit: int = 50,
+    cursor: str | None = None,
+) -> dict:
+    """Return Instagram referral posts with cursor pagination."""
+    client = get_client()
+    query = """
+        SELECT id, postUrl, caption, companyMentioned, postedAt, scrapedAt, imageUrl
+        FROM InstagramPost
+    """
+    params: list[object] = []
+
+    if cursor is not None:
+        query += """
+        WHERE scrapedAt < (
+            SELECT scrapedAt FROM InstagramPost WHERE id = ?
+        )
+        """
+        params.append(cursor)
+
+    query += """
+        ORDER BY scrapedAt DESC
+        LIMIT ?
+    """
+    params.append(limit + 1)
+
+    result = await client.execute(query, params)
+    columns = [
+        c.name if hasattr(c, "name") else str(c)
+        for c in result.columns
+    ]
+    posts = [dict(zip(columns, row)) for row in result.rows]
+
+    next_cursor = None
+    if len(posts) > limit:
+        last_row = posts.pop()
+        next_cursor = last_row["id"]
+
+    return {"posts": posts, "nextCursor": next_cursor}
+
+
 async def get_active_ats_slugs(board: str | None = None) -> list[dict]:
     """Return all active ATS slugs, optionally scoped to one board."""
     client = get_client()

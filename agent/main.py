@@ -237,20 +237,42 @@ def _recruiter_relevance(recruiter: dict) -> int:
     return int(score or 0)
 
 
-async def _get_pending_jobs_payload() -> list[dict]:
-    """Return pending jobs with the full fields expected by dashboard UIs."""
+async def _get_pending_jobs_payload(
+    limit: int = 20,
+    cursor: str | None = None,
+) -> dict:
+    """Return pending jobs with cursor pagination for dashboard UIs."""
     client = db.get_client()
-    result = await client.execute(
-        """
+    query = """
         SELECT id, title, company, location, jobBoardUrl, source,
                status, isTopPriority, jdText, matchScore, createdAt
         FROM Job
         WHERE status = 'pending'
-        ORDER BY isTopPriority DESC, createdAt ASC
+    """
+    params: list[object] = []
+    if cursor is not None:
+        query += """
+          AND createdAt < (SELECT createdAt FROM Job WHERE id = ?)
         """
-    )
-    columns = [c.name for c in result.columns]
-    return [dict(zip(columns, row)) for row in result.rows]
+        params.append(cursor)
+    query += """
+        ORDER BY isTopPriority DESC, createdAt ASC
+        LIMIT ?
+        """
+    params.append(limit + 1)
+    result = await client.execute(query, params)
+    columns = [
+        c.name if hasattr(c, "name") else str(c)
+        for c in result.columns
+    ]
+    jobs = [dict(zip(columns, row)) for row in result.rows]
+
+    next_cursor = None
+    if len(jobs) > limit:
+        last_row = jobs.pop()
+        next_cursor = last_row["id"]
+
+    return {"jobs": jobs, "nextCursor": next_cursor}
 
 
 async def _get_dashboard_stats() -> dict:
@@ -279,11 +301,13 @@ async def _get_dashboard_stats() -> dict:
     }
 
 
-async def _get_recent_applications(limit: int = 10) -> list[dict]:
-    """Return recent applications joined with job metadata for dashboards."""
+async def _get_applications_payload(
+    limit: int = 20,
+    cursor: str | None = None,
+) -> dict:
+    """Return applications joined with job metadata using cursor pagination."""
     client = db.get_client()
-    result = await client.execute(
-        """
+    query = """
         SELECT
             a.id,
             a.status,
@@ -299,11 +323,19 @@ async def _get_recent_applications(limit: int = 10) -> list[dict]:
             j.isTopPriority
         FROM Application a
         JOIN Job j ON j.id = a.jobId
+    """
+    params: list[object] = []
+    if cursor is not None:
+        query += """
+        WHERE a.createdAt < (SELECT createdAt FROM Application WHERE id = ?)
+        """
+        params.append(cursor)
+    query += """
         ORDER BY COALESCE(a.submittedAt, a.createdAt) DESC
         LIMIT ?
-        """,
-        [limit],
-    )
+        """
+    params.append(limit + 1)
+    result = await client.execute(query, params)
     applications = []
     for row in result.rows:
         applications.append({
@@ -322,7 +354,59 @@ async def _get_recent_applications(limit: int = 10) -> list[dict]:
                 "isTopPriority": bool(row[11]),
             },
         })
-    return applications
+    next_cursor = None
+    if len(applications) > limit:
+        last_row = applications.pop()
+        next_cursor = last_row["id"]
+    return {"applications": applications, "nextCursor": next_cursor}
+
+
+async def _get_recruiters_payload(
+    company: str | None = None,
+    limit: int = 20,
+    cursor: str | None = None,
+) -> dict:
+    """Return recruiters using cursor pagination."""
+    client = db.get_client()
+    query = """
+        SELECT id, name, title, company, linkedinUrl, email, relevanceScore,
+               contactedAt, linkedinSentAt, createdAt
+        FROM Recruiter
+        WHERE 1 = 1
+    """
+    params: list[object] = []
+
+    if company:
+        query += """
+          AND LOWER(company) LIKE LOWER(?)
+        """
+        params.append(f"%{company}%")
+
+    if cursor is not None:
+        query += """
+          AND createdAt < (SELECT createdAt FROM Recruiter WHERE id = ?)
+        """
+        params.append(cursor)
+
+    query += """
+        ORDER BY relevanceScore DESC, createdAt DESC
+        LIMIT ?
+    """
+    params.append(limit + 1)
+
+    result = await client.execute(query, params)
+    columns = [
+        c.name if hasattr(c, "name") else str(c)
+        for c in result.columns
+    ]
+    recruiters = [dict(zip(columns, row)) for row in result.rows]
+
+    next_cursor = None
+    if len(recruiters) > limit:
+        last_row = recruiters.pop()
+        next_cursor = last_row["id"]
+
+    return {"recruiters": recruiters, "nextCursor": next_cursor}
 
 
 # ── Agent control ────────────────────────────────────────────────────────────
@@ -519,15 +603,19 @@ async def jobs_skip(job_id: str):
 
 
 @app.get("/jobs/queue")
-async def jobs_queue():
-    jobs = await _get_pending_jobs_payload()
-    return {"jobs": jobs}
+async def jobs_queue(limit: int = 20, cursor: str | None = None):
+    return await _get_pending_jobs_payload(limit=limit, cursor=cursor)
 
 
 @app.get("/jobs/retry-queue")
 async def jobs_retry_queue():
     jobs = await db.get_retry_queued_jobs()
     return {"jobs": jobs}
+
+
+@app.get("/referrals")
+async def referrals(limit: int = 20, cursor: str | None = None):
+    return await db.get_instagram_posts(limit=limit, cursor=cursor)
 
 
 @app.get("/dashboard/stats")
@@ -537,8 +625,12 @@ async def dashboard_stats():
 
 @app.get("/applications/recent")
 async def recent_applications():
-    applications = await _get_recent_applications(limit=10)
-    return {"applications": applications}
+    return await _get_applications_payload(limit=10, cursor=None)
+
+
+@app.get("/applications")
+async def applications(limit: int = 20, cursor: str | None = None):
+    return await _get_applications_payload(limit=limit, cursor=cursor)
 
 
 # ── Application batch ────────────────────────────────────────────────────────
@@ -566,6 +658,14 @@ async def run_batch():
 
 
 # ── Recruiter search ─────────────────────────────────────────────────────────
+
+@app.get("/recruiters")
+async def recruiters(company: str | None = None, limit: int = 20, cursor: str | None = None):
+    return await _get_recruiters_payload(
+        company=company,
+        limit=limit,
+        cursor=cursor,
+    )
 
 @app.post("/recruiters/find/{company}")
 async def find_recruiters(company: str):
