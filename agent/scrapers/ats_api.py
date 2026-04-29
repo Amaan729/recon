@@ -15,7 +15,7 @@ import httpx
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import db
-from scrapers.filters import passes_basic_filter
+from scrapers.filters import passes_basic_filter, ai_match_score
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,7 @@ def _normalize_greenhouse(raw: dict, slug: str, company: str) -> dict | None:
         "posted_at": _coerce_iso(raw.get("updated_at")),
         "slug": slug,
     }
-    if not title or not url or not passes_basic_filter(job):
+    if not title or not url:
         return None
     return job
 
@@ -158,7 +158,7 @@ def _normalize_lever(raw: dict, slug: str, company: str) -> dict | None:
         "posted_at": _coerce_iso(raw.get("createdAt")),
         "slug": slug,
     }
-    if not title or not url or not passes_basic_filter(job):
+    if not title or not url:
         return None
     return job
 
@@ -180,12 +180,12 @@ def _normalize_ashby(raw: dict, slug: str, company: str) -> dict | None:
         "posted_at": _coerce_iso(raw.get("publishedDate")),
         "slug": slug,
     }
-    if not title or not url or not passes_basic_filter(job):
+    if not title or not url:
         return None
     return job
 
 
-async def _insert_job_if_new(job: dict) -> bool:
+async def _insert_job_if_new(job: dict, match_score: int) -> bool:
     client = db.get_client()
     existing = await client.execute(
         "SELECT id FROM Job WHERE jobBoardUrl = ?",
@@ -202,6 +202,7 @@ async def _insert_job_if_new(job: dict) -> bool:
         location=job.get("location"),
         jd_text=job.get("jd_text"),
         is_top_priority=False,
+        match_score=match_score,
     )
     return True
 
@@ -226,7 +227,14 @@ async def _scrape_greenhouse(
             job = _normalize_greenhouse(raw_job, slug, company)
             if job is None:
                 continue
-            if await _insert_job_if_new(job):
+            if not await passes_basic_filter(job):
+                continue
+
+            score = await ai_match_score(job)
+            if score < 60:
+                continue
+
+            if await _insert_job_if_new(job, score):
                 inserted += 1
         await db.update_ats_slug_scraped(slug, "greenhouse")
         return inserted
@@ -255,7 +263,14 @@ async def _scrape_lever(
             job = _normalize_lever(raw_job, slug, company)
             if job is None:
                 continue
-            if await _insert_job_if_new(job):
+            if not await passes_basic_filter(job):
+                continue
+
+            score = await ai_match_score(job)
+            if score < 60:
+                continue
+
+            if await _insert_job_if_new(job, score):
                 inserted += 1
         await db.update_ats_slug_scraped(slug, "lever")
         return inserted
@@ -285,7 +300,14 @@ async def _scrape_ashby(
             job = _normalize_ashby(raw_job, slug, company)
             if job is None:
                 continue
-            if await _insert_job_if_new(job):
+            if not await passes_basic_filter(job):
+                continue
+
+            score = await ai_match_score(job)
+            if score < 60:
+                continue
+
+            if await _insert_job_if_new(job, score):
                 inserted += 1
         await db.update_ats_slug_scraped(slug, "ashby")
         return inserted
@@ -295,28 +317,23 @@ async def _scrape_ashby(
         return 0
 
 
-async def _seed_slugs_if_empty() -> None:
-    client = db.get_client()
-    result = await client.execute("SELECT COUNT(*) FROM AtsSlugs")
-    existing_count = int(result.rows[0][0]) if result.rows else 0
-    if existing_count > 0:
-        return
-
-    seeded = 0
+async def _ensure_known_slugs() -> None:
+    """Ensure all built-in Greenhouse, Lever, and Ashby boards are present."""
+    ensured = 0
     for slug, company in GREENHOUSE_SLUGS:
         await db.upsert_ats_slug(slug, "greenhouse", company)
-        seeded += 1
+        ensured += 1
     for slug, company in LEVER_SLUGS:
         await db.upsert_ats_slug(slug, "lever", company)
-        seeded += 1
+        ensured += 1
     for slug, company in ASHBY_SLUGS:
         await db.upsert_ats_slug(slug, "ashby", company)
-        seeded += 1
+        ensured += 1
 
-    print(f"Seeded {seeded} ATS slugs")
+    print(f"Ensured {ensured} built-in ATS slugs")
 
 
-async def main() -> None:
+async def main() -> dict:
     """
     Main entry point for APScheduler.
     1. Seed known ATS slugs if the table is empty
@@ -326,7 +343,7 @@ async def main() -> None:
     5. Print summary
     """
     print("Starting ATS API scraper...")
-    await _seed_slugs_if_empty()
+    await _ensure_known_slugs()
 
     slugs = await db.get_active_ats_slugs()
     print(f"Loaded {len(slugs)} active ATS slugs")
@@ -360,6 +377,28 @@ async def main() -> None:
         + sum(lever_results)
         + sum(ashby_results)
     )
+    board_counts = {
+        "greenhouse": {
+            "attempted": len(greenhouse_slugs),
+            "inserted": sum(greenhouse_results),
+        },
+        "lever": {
+            "attempted": len(lever_slugs),
+            "inserted": sum(lever_results),
+        },
+        "ashby": {
+            "attempted": len(ashby_slugs),
+            "inserted": sum(ashby_results),
+        },
+    }
+    message = (
+        f"Greenhouse {board_counts['greenhouse']['inserted']}/"
+        f"{board_counts['greenhouse']['attempted']}, "
+        f"Lever {board_counts['lever']['inserted']}/"
+        f"{board_counts['lever']['attempted']}, "
+        f"Ashby {board_counts['ashby']['inserted']}/"
+        f"{board_counts['ashby']['attempted']} inserted"
+    )
     print(
         "Found "
         f"{sum(greenhouse_results)} greenhouse, "
@@ -367,6 +406,11 @@ async def main() -> None:
         f"{sum(ashby_results)} ashby jobs"
     )
     print(f"Done — inserted: {inserted} | skipped: 0 | boards: 3")
+    return {
+        "inserted": inserted,
+        "boards": board_counts,
+        "message": message,
+    }
 
 
 if __name__ == "__main__":

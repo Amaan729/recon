@@ -21,8 +21,6 @@ type CandidateProfile = {
   requiresSponsorship: string
 }
 
-const AGENT_URL = (process.env.NEXT_PUBLIC_AGENT_URL ?? "http://localhost:8000").replace(/\/$/, "")
-
 const EMPTY_PROFILE: CandidateProfile = {
   firstName: "",
   lastName: "",
@@ -44,6 +42,48 @@ const EMPTY_PROFILE: CandidateProfile = {
 const INPUT_CLASS =
   "w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white placeholder:text-white/25 focus:outline-none focus:border-white/25 focus:bg-white/8 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
 
+function normalizeProfile(data: Partial<CandidateProfile>): CandidateProfile {
+  return {
+    firstName: data.firstName ?? "",
+    lastName: data.lastName ?? "",
+    email: data.email ?? "",
+    phone: data.phone ?? "",
+    university: data.university ?? "",
+    major: data.major ?? "",
+    gpa: data.gpa ?? "",
+    graduationYear: data.graduationYear ?? "",
+    graduationMonth: data.graduationMonth ?? "",
+    linkedinUrl: data.linkedinUrl ?? "",
+    githubUrl: data.githubUrl ?? "",
+    portfolioUrl: data.portfolioUrl ?? "",
+    location: data.location ?? "",
+    workAuthorization: data.workAuthorization ?? "Yes",
+    requiresSponsorship: data.requiresSponsorship ?? "No",
+  }
+}
+
+async function fetchCandidateProfile(init?: RequestInit): Promise<CandidateProfile> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 8_000)
+
+  try {
+    const res = await fetch("/api/candidate", {
+      cache: "no-store",
+      ...init,
+      signal: controller.signal,
+    })
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => null) as { error?: string } | null
+      throw new Error(data?.error ?? "Candidate profile request failed")
+    }
+
+    return normalizeProfile(await res.json() as Partial<CandidateProfile>)
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
 export default function SettingsPage() {
   const [profile, setProfile] = useState<CandidateProfile>(EMPTY_PROFILE)
   const [loading, setLoading] = useState(true)
@@ -51,28 +91,11 @@ export default function SettingsPage() {
 
   const fetchProfile = useCallback(async () => {
     try {
-      const res = await fetch(`${AGENT_URL}/candidate`, { cache: "no-store" })
-      if (!res.ok) throw new Error("candidate fetch failed")
-      const data = await res.json() as CandidateProfile
-      setProfile({
-        firstName: data.firstName ?? "",
-        lastName: data.lastName ?? "",
-        email: data.email ?? "",
-        phone: data.phone ?? "",
-        university: data.university ?? "",
-        major: data.major ?? "",
-        gpa: data.gpa ?? "",
-        graduationYear: data.graduationYear ?? "",
-        graduationMonth: data.graduationMonth ?? "",
-        linkedinUrl: data.linkedinUrl ?? "",
-        githubUrl: data.githubUrl ?? "",
-        portfolioUrl: data.portfolioUrl ?? "",
-        location: data.location ?? "",
-        workAuthorization: data.workAuthorization ?? "Yes",
-        requiresSponsorship: data.requiresSponsorship ?? "No",
+      setProfile(await fetchCandidateProfile())
+    } catch (error) {
+      toast.error("Failed to load profile", {
+        description: error instanceof Error ? error.message : undefined,
       })
-    } catch {
-      toast.error("Failed to load profile")
     } finally {
       setLoading(false)
     }
@@ -92,35 +115,19 @@ export default function SettingsPage() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      const res = await fetch(`${AGENT_URL}/candidate`, {
+      const data = await fetchCandidateProfile({
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(profile),
       })
-      if (!res.ok) throw new Error("candidate save failed")
-      const data = await res.json() as CandidateProfile
-      setProfile({
-        firstName: data.firstName ?? "",
-        lastName: data.lastName ?? "",
-        email: data.email ?? "",
-        phone: data.phone ?? "",
-        university: data.university ?? "",
-        major: data.major ?? "",
-        gpa: data.gpa ?? "",
-        graduationYear: data.graduationYear ?? "",
-        graduationMonth: data.graduationMonth ?? "",
-        linkedinUrl: data.linkedinUrl ?? "",
-        githubUrl: data.githubUrl ?? "",
-        portfolioUrl: data.portfolioUrl ?? "",
-        location: data.location ?? "",
-        workAuthorization: data.workAuthorization ?? "Yes",
-        requiresSponsorship: data.requiresSponsorship ?? "No",
-      })
+      setProfile(data)
       toast.success("Profile saved")
-    } catch {
-      toast.error("Failed to save profile")
+    } catch (error) {
+      toast.error("Failed to save profile", {
+        description: error instanceof Error ? error.message : undefined,
+      })
     } finally {
       setSaving(false)
     }

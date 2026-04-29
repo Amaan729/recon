@@ -60,13 +60,27 @@ _scheduler: AsyncIOScheduler | None = None
 _broadcast_fn: Callable[..., Awaitable[Any]] | None = None
 
 _job_run_state: dict[str, dict] = {
-    "linkedin":      {"status": "never", "last_run_at": None},
-    "ats_api":       {"status": "never", "last_run_at": None},
-    "workday":       {"status": "never", "last_run_at": None},
-    "instagram":     {"status": "never", "last_run_at": None},
-    "ats_discovery": {"status": "never", "last_run_at": None},
-    "icims":         {"status": "never", "last_run_at": None},
+    "linkedin":      {"status": "never", "last_run_at": None, "current_message": "Not run yet", "last_summary": None},
+    "ats_api":       {"status": "never", "last_run_at": None, "current_message": "Not run yet", "last_summary": None},
+    "workday":       {"status": "never", "last_run_at": None, "current_message": "Not run yet", "last_summary": None},
+    "instagram":     {"status": "never", "last_run_at": None, "current_message": "Not run yet", "last_summary": None},
+    "ats_discovery": {"status": "never", "last_run_at": None, "current_message": "Not run yet", "last_summary": None},
+    "icims":         {"status": "never", "last_run_at": None, "current_message": "Not run yet", "last_summary": None},
 }
+
+
+def _default_job_state() -> dict:
+    return {
+        "status": "never",
+        "last_run_at": None,
+        "current_message": "Not run yet",
+        "last_summary": None,
+    }
+
+
+def _update_job_state(job_id: str, **updates: Any) -> None:
+    state = _job_run_state.setdefault(job_id, _default_job_state())
+    state.update(updates)
 
 
 # ── Logging helper ────────────────────────────────────────────────
@@ -89,22 +103,56 @@ async def _run_job(job_id: str, fn, job_name: str) -> None:
     A crash here is caught and recorded — it never reaches APScheduler.
     """
     if fn is None:
-        await _log(f"{job_name}: scraper not implemented yet — skipping")
+        now = datetime.now(timezone.utc).isoformat()
+        message = f"{job_name}: scraper not implemented yet - skipping"
+        _update_job_state(
+            job_id,
+            status="skipped",
+            last_run_at=now,
+            current_message=message,
+            last_summary={"message": message},
+        )
+        await _log(message)
         return
 
-    _job_run_state[job_id]["last_run_at"] = datetime.now(timezone.utc).isoformat()
-    _job_run_state[job_id]["status"] = "running"
+    started_at = datetime.now(timezone.utc).isoformat()
+    _update_job_state(
+        job_id,
+        last_run_at=started_at,
+        status="running",
+        current_message=f"{job_name}: running",
+    )
     await _log(f"{job_name}: starting")
 
     try:
-        await fn()
-        _job_run_state[job_id]["status"] = "success"
-        _job_run_state[job_id]["last_run_at"] = datetime.now(timezone.utc).isoformat()
-        await _log(f"{job_name}: completed successfully")
+        result = await fn()
+        summary = result if isinstance(result, dict) else None
+        summary_message = (
+            summary.get("message")
+            if isinstance(summary, dict) and isinstance(summary.get("message"), str)
+            else None
+        )
+        completed_at = datetime.now(timezone.utc).isoformat()
+        message = summary_message or f"{job_name}: completed successfully"
+        _update_job_state(
+            job_id,
+            status="success",
+            last_run_at=completed_at,
+            current_message=message,
+            last_summary=summary,
+        )
+        await _log(message)
     except Exception as exc:
-        _job_run_state[job_id]["status"] = "failed"
-        _job_run_state[job_id]["last_run_at"] = datetime.now(timezone.utc).isoformat()
-        await _log(f"{job_name}: failed — {exc}")
+        failed_at = datetime.now(timezone.utc).isoformat()
+        message = f"{job_name}: failed - {exc}"
+        _update_job_state(
+            job_id,
+            status="failed",
+            last_run_at=failed_at,
+            current_message=message,
+            last_summary={"message": message},
+        )
+        await _log(message)
         logger.exception("[scheduler] %s raised an exception", job_name)
 
 
@@ -218,15 +266,19 @@ def get_job_statuses() -> list[dict]:
     statuses = []
     for job in _scheduler.get_jobs():
         run_state = _job_run_state.get(
-            job.id, {"status": "never", "last_run_at": None}
+            job.id, _default_job_state()
         )
         # next_run_time only exists after scheduler.start() — pending jobs don't have it
         raw_next = getattr(job, "next_run_time", None)
         next_run = raw_next.isoformat() if raw_next else None
         statuses.append({
             "job_id": job.id,
+            "name": job.name,
             "next_run_time": next_run,
+            "status": run_state["status"],
             "last_run_status": run_state["status"],
             "last_run_at": run_state["last_run_at"],
+            "current_message": run_state.get("current_message"),
+            "last_summary": run_state.get("last_summary"),
         })
     return statuses

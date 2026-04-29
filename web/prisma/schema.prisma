@@ -163,6 +163,8 @@ model Job {
   status        String       @default("pending")
   // pending | approved | skipped | applied | retry_queued | failed
   isTopPriority Boolean      @default(false)
+  useResumeTailor Boolean    @default(false)
+  runRecruiterSearch Boolean @default(false)
   jdText        String?
   matchScore    Int?
   retryCount    Int          @default(0)

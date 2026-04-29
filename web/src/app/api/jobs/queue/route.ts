@@ -8,42 +8,57 @@ function parseLimit(value: string | null, fallback: number) {
 }
 
 export async function GET(request: NextRequest) {
+  const limit = parseLimit(request.nextUrl.searchParams.get("limit"), 20)
+  const cursor = request.nextUrl.searchParams.get("cursor")
+
   try {
-    const searchParams = request.nextUrl.searchParams
-    const limit = parseLimit(searchParams.get("limit"), 20)
-    const cursor = searchParams.get("cursor")
+    const agentUrl = (process.env.AGENT_URL ?? "http://localhost:8000").replace(/\/$/, "")
+    const query = request.nextUrl.searchParams.toString()
+    const targetUrl = query ? `${agentUrl}/jobs/queue?${query}` : `${agentUrl}/jobs/queue`
 
-    const cursorJob = cursor
-      ? await prisma.job.findUnique({
-          where: { id: cursor },
-          select: { createdAt: true },
-        })
-      : null
-
-    const jobs = await prisma.job.findMany({
-      where: {
-        status: "pending",
-        ...(cursorJob ? { createdAt: { lt: cursorJob.createdAt } } : {}),
+    const res = await fetch(targetUrl, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(8_000),
+      headers: {
+        "Content-Type": "application/json",
       },
-      orderBy: [
-        { isTopPriority: "desc" },
-        { createdAt: "asc" },
-      ],
-      take: limit + 1,
     })
 
-    let nextCursor: string | null = null
-    if (jobs.length > limit) {
-      const lastRow = jobs.pop()
-      nextCursor = lastRow?.id ?? null
+    if (!res.ok) {
+      throw new Error(`Agent queue returned ${res.status}`)
     }
 
-    return NextResponse.json({ jobs, nextCursor })
+    const data = await res.json()
+    return NextResponse.json(data)
   } catch (error) {
-    console.error("Failed to fetch job queue:", error)
-    return NextResponse.json(
-      { error: "Failed to fetch jobs" },
-      { status: 500 }
-    )
+    console.error("Failed to fetch job queue from agent, falling back to DB:", error)
+
+    try {
+      const pendingJobs = await prisma.job.findMany({
+        where: { status: "pending" },
+        orderBy: [
+          { isTopPriority: "desc" },
+          { createdAt: "asc" },
+          { id: "asc" },
+        ],
+      })
+
+      const startIndex = cursor
+        ? Math.max(pendingJobs.findIndex((job) => job.id === cursor) + 1, 0)
+        : 0
+
+      const page = pendingJobs.slice(startIndex, startIndex + limit + 1)
+      const hasMore = page.length > limit
+      const jobs = hasMore ? page.slice(0, limit) : page
+      const nextCursor = hasMore ? jobs[jobs.length - 1]?.id ?? null : null
+
+      return NextResponse.json({ jobs, nextCursor })
+    } catch (dbError) {
+      console.error("Failed to fetch job queue from DB:", dbError)
+      return NextResponse.json(
+        { error: "Failed to fetch jobs" },
+        { status: 500 }
+      )
+    }
   }
 }

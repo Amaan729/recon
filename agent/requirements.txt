@@ -1,5 +1,6 @@
 fastapi==0.115.0
 uvicorn==0.30.0
+websockets==15.0.1
 browser-use==0.1.40
 playwright==1.49.0
 python-dotenv==1.0.1
@@ -16,6 +17,7 @@ boto3==1.34.0
 google-auth==2.29.0
 google-api-python-client==2.130.0
 langchain-google-genai==2.1.12
+langchain-openai==0.3.1
 apscheduler>=3.10.0
 camoufox>=0.4.0
 2captcha-python==2.0.6

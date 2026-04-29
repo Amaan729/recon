@@ -18,6 +18,13 @@ type AgentStatusResponse = {
   lastRunAt: string | null
 }
 
+type OverviewResponse = {
+  stats: DashboardStats
+  pendingJobs: PendingJob[]
+  applications: RecentApplication[]
+  agent: AgentStatusResponse
+}
+
 type PendingJob = {
   id: string
   title: string
@@ -45,8 +52,6 @@ type RecentApplication = {
     isTopPriority: boolean
   }
 }
-
-const AGENT_URL = (process.env.NEXT_PUBLIC_AGENT_URL ?? "http://localhost:8000").replace(/\/$/, "")
 
 const SOURCE_STYLE: Record<string, string> = {
   linkedin:   "bg-blue-500/15 text-blue-300 border-blue-500/25",
@@ -90,23 +95,6 @@ function formatLastRun(lastRunAt: string | null): string {
   return `${date.toLocaleString()} · ${timeAgo(lastRunAt)}`
 }
 
-async function fetchAgentJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${AGENT_URL}${path}`, {
-    ...init,
-    cache: "no-store",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  })
-
-  if (!res.ok) {
-    throw new Error(`Request failed for ${path}`)
-  }
-
-  return await res.json() as T
-}
-
 export default function DashboardHomePage() {
   const [stats, setStats] = useState<DashboardStats>({
     pending: 0,
@@ -124,24 +112,13 @@ export default function DashboardHomePage() {
   const [actingOnJobs, setActingOnJobs] = useState<Set<string>>(new Set())
   const [startingAgent, setStartingAgent] = useState(false)
 
-  const fetchStats = useCallback(async () => {
-    const data = await fetchAgentJson<DashboardStats>("/dashboard/stats")
-    setStats(data)
-  }, [])
-
-  const fetchPendingJobs = useCallback(async () => {
-    const data = await fetchAgentJson<{ jobs: PendingJob[] }>("/jobs/queue")
-    setPendingJobs(data.jobs)
-  }, [])
-
-  const fetchRecentApplications = useCallback(async () => {
-    const data = await fetchAgentJson<{ applications: RecentApplication[] }>("/applications/recent")
-    setApplications(data.applications)
-  }, [])
-
   const fetchAgentStatus = useCallback(async () => {
     try {
-      const data = await fetchAgentJson<AgentStatusResponse>("/agent/status")
+      const res = await fetch("/api/agent/status", { cache: "no-store" })
+      if (!res.ok) {
+        throw new Error("agent status failed")
+      }
+      const data = await res.json() as AgentStatusResponse
       setAgent({
         status: data.status,
         lastRunAt: data.lastRunAt,
@@ -153,18 +130,21 @@ export default function DashboardHomePage() {
 
   const fetchOverview = useCallback(async () => {
     try {
-      await Promise.all([
-        fetchStats(),
-        fetchPendingJobs(),
-        fetchRecentApplications(),
-        fetchAgentStatus(),
-      ])
+      const res = await fetch("/api/dashboard/overview", { cache: "no-store" })
+      if (!res.ok) {
+        throw new Error("overview failed")
+      }
+      const data = await res.json() as OverviewResponse
+      setStats(data.stats)
+      setPendingJobs(data.pendingJobs)
+      setApplications(data.applications)
+      setAgent(data.agent)
     } catch {
       toast.error("Failed to load dashboard overview")
     } finally {
       setLoading(false)
     }
-  }, [fetchAgentStatus, fetchPendingJobs, fetchRecentApplications, fetchStats])
+  }, [])
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -178,20 +158,17 @@ export default function DashboardHomePage() {
     return () => clearInterval(t)
   }, [fetchAgentStatus])
 
-  const handleJobAction = async (job: PendingJob, action: "approve" | "skip") => {
+  const handleSkipJob = async (job: PendingJob) => {
     setActingOnJobs(prev => new Set([...prev, job.id]))
     try {
-      await fetchAgentJson(`/jobs/${action}/${job.id}`, { method: "POST" })
-      if (action === "approve") {
-        toast.success("Approved job", {
-          description: `${job.title} at ${job.company}`,
-        })
-      } else {
-        toast("Skipped job", { description: `${job.title} at ${job.company}` })
+      const res = await fetch(`/api/jobs/${job.id}/skip`, { method: "POST" })
+      if (!res.ok) {
+        throw new Error("skip failed")
       }
-      await Promise.all([fetchPendingJobs(), fetchStats(), fetchAgentStatus()])
+      toast("Skipped job", { description: `${job.title} at ${job.company}` })
+      await fetchOverview()
     } catch {
-      toast.error(`Failed to ${action} job`)
+      toast.error("Failed to skip job")
     } finally {
       setActingOnJobs(prev => {
         const next = new Set(prev)
@@ -204,7 +181,10 @@ export default function DashboardHomePage() {
   const handleStartAgent = async () => {
     setStartingAgent(true)
     try {
-      await fetchAgentJson("/agent/start", { method: "POST" })
+      const res = await fetch("/api/agent/start", { method: "POST" })
+      if (!res.ok) {
+        throw new Error("agent start failed")
+      }
       toast.success("Agent started")
       await fetchAgentStatus()
     } catch {
@@ -237,7 +217,7 @@ export default function DashboardHomePage() {
               {!loading && <span className="stat-badge">Overview</span>}
             </div>
             <p className="text-white/40 text-sm mt-1">
-              Monitor your pipeline, approve jobs, and keep the agent moving.
+              Monitor your pipeline, review fresh jobs, and keep the apply agent moving.
             </p>
           </div>
         </div>
@@ -329,8 +309,7 @@ export default function DashboardHomePage() {
                     key={job.id}
                     job={job}
                     acting={actingOnJobs.has(job.id)}
-                    onApprove={() => handleJobAction(job, "approve")}
-                    onSkip={() => handleJobAction(job, "skip")}
+                    onSkip={() => handleSkipJob(job)}
                   />
                 ))}
               </div>
@@ -361,7 +340,7 @@ export default function DashboardHomePage() {
             {loading ? (
               <SectionSkeleton rows={5} />
             ) : recentApplications.length === 0 ? (
-              <EmptyState message="No applications yet. Approve jobs to kick things off." />
+              <EmptyState message="No applications yet. Queue jobs from the jobs page to kick things off." />
             ) : (
               <div className="space-y-2.5">
                 {recentApplications.map(application => (
@@ -430,12 +409,10 @@ function EmptyState({ message }: { message: string }) {
 function PendingJobRow({
   job,
   acting,
-  onApprove,
   onSkip,
 }: {
   job: PendingJob
   acting: boolean
-  onApprove: () => void
   onSkip: () => void
 }) {
   return (
@@ -477,21 +454,18 @@ function PendingJobRow({
           )}
 
           <div className="flex items-center gap-1.5">
+            <Link
+              href="/dashboard/jobs"
+              className="text-xs px-3 py-1.5 font-medium rounded-xl border border-white/12 text-white/65 hover:text-white hover:border-white/20 hover:bg-white/6 transition-all"
+            >
+              Review
+            </Link>
             <button
               onClick={onSkip}
               disabled={acting}
               className="btn-ghost text-xs px-3 py-1.5 font-medium disabled:opacity-40"
             >
               Skip
-            </button>
-            <button
-              onClick={onApprove}
-              disabled={acting}
-              className="text-xs px-3 py-1.5 font-semibold rounded-xl transition-all duration-150 disabled:opacity-40
-                bg-emerald-500/18 text-emerald-300 border border-emerald-500/28
-                hover:bg-emerald-500/28 hover:text-emerald-200 hover:-translate-y-px"
-            >
-              Approve
             </button>
           </div>
         </div>

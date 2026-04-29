@@ -14,10 +14,16 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   {
+    href: "/dashboard",
+    label: "Dashboard",
+    icon: "◉",
+    description: "Overview and activity",
+  },
+  {
     href: "/dashboard/jobs",
     label: "Jobs Queue",
     icon: "◈",
-    description: "Review and approve jobs",
+    description: "Review and queue jobs",
   },
   {
     href: "/dashboard/applications",
@@ -57,8 +63,6 @@ const SETTINGS_ITEM: NavItem = {
   icon: "◐",
 }
 
-const AGENT_URL = (process.env.NEXT_PUBLIC_AGENT_URL ?? "http://localhost:8000").replace(/\/$/, "")
-
 function formatBadgeCount(count: number): string {
   return count > 99 ? "99+" : String(count)
 }
@@ -71,6 +75,7 @@ export default function Sidebar() {
   const [queuedOutreachCount, setQueuedOutreachCount] = useState(0)
 
   const isActive = (href: string) => {
+    if (href === "/dashboard") return pathname === href
     if (href === "/dashboard/jobs") return pathname === href
     return pathname.startsWith(href)
   }
@@ -80,22 +85,15 @@ export default function Sidebar() {
 
     const fetchCounts = async () => {
       try {
-        const [jobsRes, outreachRes] = await Promise.all([
-          fetch(`${AGENT_URL}/jobs/queue`, { cache: "no-store" }),
-          fetch(`${AGENT_URL}/outreach/queued`, { cache: "no-store" }),
-        ])
-
-        if (jobsRes.ok) {
-          const data = await jobsRes.json() as { jobs?: unknown[] }
-          if (!cancelled) {
-            setPendingCount(Array.isArray(data.jobs) ? data.jobs.length : 0)
+        const res = await fetch("/api/dashboard/badges", { cache: "no-store" })
+        if (res.ok) {
+          const data = await res.json() as {
+            pendingCount?: number
+            queuedOutreachCount?: number
           }
-        }
-
-        if (outreachRes.ok) {
-          const data = await outreachRes.json() as { items?: unknown[] }
           if (!cancelled) {
-            setQueuedOutreachCount(Array.isArray(data.items) ? data.items.length : 0)
+            setPendingCount(data.pendingCount ?? 0)
+            setQueuedOutreachCount(data.queuedOutreachCount ?? 0)
           }
         }
       } catch {
@@ -118,7 +116,7 @@ export default function Sidebar() {
     <div className="flex flex-col h-full">
       {/* Logo */}
       <div className="px-5 py-5 border-b border-white/8 shrink-0">
-        <div className="flex items-center gap-2.5">
+        <Link href="/dashboard" onClick={() => setMobileOpen(false)} className="flex items-center gap-2.5">
           <div className="w-7 h-7 rounded-lg bg-white/10 border border-white/15 flex items-center justify-center text-white/80 font-bold text-xs select-none">
             ⬡
           </div>
@@ -128,7 +126,7 @@ export default function Sidebar() {
             </div>
             <div className="text-white/30 text-xs">job search engine</div>
           </div>
-        </div>
+        </Link>
       </div>
 
       {/* Main nav */}

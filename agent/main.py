@@ -31,10 +31,26 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Recon Agent", version="0.1.0", lifespan=lifespan)
 
-_allowed_origins = ["http://localhost:3001", "http://localhost:3000"]
-_app_url = os.getenv("NEXT_PUBLIC_APP_URL")
-if _app_url:
-    _allowed_origins.append(_app_url)
+
+def _split_env_urls(*values: str | None) -> list[str]:
+    urls: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        for part in value.split(","):
+            url = part.strip().rstrip("/")
+            if url and url not in urls:
+                urls.append(url)
+    return urls
+
+
+_allowed_origins = _split_env_urls(
+    "http://localhost:3001",
+    "http://localhost:3000",
+    os.getenv("NEXT_PUBLIC_APP_URL"),
+    os.getenv("AUTH_URL"),
+    os.getenv("CORS_ALLOW_ORIGINS"),
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -195,7 +211,10 @@ async def _get_job_for_outreach(job_id: str) -> dict | None:
     )
     if not result.rows:
         return None
-    columns = [c.name for c in result.columns]
+    columns = [
+        c.name if hasattr(c, "name") else str(c)
+        for c in result.columns
+    ]
     return dict(zip(columns, result.rows[0]))
 
 
@@ -245,18 +264,47 @@ async def _get_pending_jobs_payload(
     client = db.get_client()
     query = """
         SELECT id, title, company, location, jobBoardUrl, source,
-               status, isTopPriority, jdText, matchScore, createdAt
+               status, isTopPriority, useResumeTailor, runRecruiterSearch,
+               jdText, matchScore, createdAt
         FROM Job
         WHERE status = 'pending'
     """
     params: list[object] = []
     if cursor is not None:
-        query += """
-          AND createdAt < (SELECT createdAt FROM Job WHERE id = ?)
-        """
-        params.append(cursor)
+        cursor_result = await client.execute(
+            """
+            SELECT id, isTopPriority, createdAt
+            FROM Job
+            WHERE id = ?
+            LIMIT 1
+            """,
+            [cursor],
+        )
+        if cursor_result.rows:
+            cursor_id, cursor_priority, cursor_created_at = cursor_result.rows[0]
+            query += """
+              AND (
+                isTopPriority < ?
+                OR (
+                  isTopPriority = ?
+                  AND (
+                    createdAt > ?
+                    OR (createdAt = ? AND id > ?)
+                  )
+                )
+              )
+            """
+            params.extend(
+                [
+                    int(cursor_priority or 0),
+                    int(cursor_priority or 0),
+                    cursor_created_at,
+                    cursor_created_at,
+                    cursor_id,
+                ]
+            )
     query += """
-        ORDER BY isTopPriority DESC, createdAt ASC
+        ORDER BY isTopPriority DESC, createdAt ASC, id ASC
         LIMIT ?
         """
     params.append(limit + 1)
@@ -326,12 +374,30 @@ async def _get_applications_payload(
     """
     params: list[object] = []
     if cursor is not None:
-        query += """
-        WHERE a.createdAt < (SELECT createdAt FROM Application WHERE id = ?)
-        """
-        params.append(cursor)
+        cursor_result = await client.execute(
+            """
+            SELECT id, submittedAt, createdAt
+            FROM Application
+            WHERE id = ?
+            LIMIT 1
+            """,
+            [cursor],
+        )
+        if cursor_result.rows:
+            cursor_id, cursor_submitted_at, cursor_created_at = cursor_result.rows[0]
+            cursor_sort_at = cursor_submitted_at or cursor_created_at
+            query += """
+            WHERE (
+                COALESCE(a.submittedAt, a.createdAt) < ?
+                OR (
+                    COALESCE(a.submittedAt, a.createdAt) = ?
+                    AND a.id < ?
+                )
+            )
+            """
+            params.extend([cursor_sort_at, cursor_sort_at, cursor_id])
     query += """
-        ORDER BY COALESCE(a.submittedAt, a.createdAt) DESC
+        ORDER BY COALESCE(a.submittedAt, a.createdAt) DESC, a.id DESC
         LIMIT ?
         """
     params.append(limit + 1)
@@ -383,13 +449,41 @@ async def _get_recruiters_payload(
         params.append(f"%{company}%")
 
     if cursor is not None:
-        query += """
-          AND createdAt < (SELECT createdAt FROM Recruiter WHERE id = ?)
-        """
-        params.append(cursor)
+        cursor_result = await client.execute(
+            """
+            SELECT id, relevanceScore, createdAt
+            FROM Recruiter
+            WHERE id = ?
+            LIMIT 1
+            """,
+            [cursor],
+        )
+        if cursor_result.rows:
+            cursor_id, cursor_score, cursor_created_at = cursor_result.rows[0]
+            query += """
+              AND (
+                relevanceScore < ?
+                OR (
+                  relevanceScore = ?
+                  AND (
+                    createdAt < ?
+                    OR (createdAt = ? AND id < ?)
+                  )
+                )
+              )
+            """
+            params.extend(
+                [
+                    int(cursor_score or 0),
+                    int(cursor_score or 0),
+                    cursor_created_at,
+                    cursor_created_at,
+                    cursor_id,
+                ]
+            )
 
     query += """
-        ORDER BY relevanceScore DESC, createdAt DESC
+        ORDER BY relevanceScore DESC, createdAt DESC, id DESC
         LIMIT ?
     """
     params.append(limit + 1)
@@ -471,129 +565,31 @@ async def agent_stream(websocket: WebSocket):
 # ── Job queue ────────────────────────────────────────────────────────────────
 
 @app.post("/jobs/approve/{job_id}")
-async def jobs_approve(job_id: str):
-    await db.update_job_status(job_id, "approved")
-    response = {
-        "status": "ok",
-        "job_id": job_id,
-        "outreach_queued": False,
-        "recruiter_name": None,
-        "linkedin_connection_queued": False,
-        "linkedin_inmail_queued": False,
-        "email_attempted": False,
-        "email_sent": False,
-    }
-
-    job = await _get_job_for_outreach(job_id)
-    if not job:
-        print(f"[main] warning: approved job {job_id} not found for outreach")
-        return response
-
-    company = (job.get("company") or "").strip()
-    job_title = (job.get("title") or "Software Engineering Intern").strip()
-    resume_pdf_path = job.get("resumeVersion") or ""
-    if not company:
-        print(f"[main] warning: approved job {job_id} is missing company")
-        return response
+async def jobs_approve(job_id: str, request: Request):
+    use_resume_tailor = False
+    run_recruiter_search = False
 
     try:
-        recruiters = await db.get_recruiters_for_company(company)
-        if not recruiters:
-            recruiter_ids = await recruiter_scraper.find_and_store_recruiters(company)
-            if recruiter_ids:
-                recruiters = await db.get_recruiters_for_company(company)
+        payload = await request.json()
+        if isinstance(payload, dict):
+            use_resume_tailor = bool(payload.get("useResumeTailor", False))
+            run_recruiter_search = bool(payload.get("runRecruiterSearch", False))
+    except Exception:
+        pass
 
-        recruiters = sorted(
-            recruiters,
-            key=_recruiter_relevance,
-            reverse=True,
-        )
-        if not recruiters:
-            print(
-                f"[main] warning: no recruiters found for {company} after "
-                f"approving job {job_id}"
-            )
-            return response
-
-        recruiter = recruiters[0]
-        recruiter_id = recruiter.get("id")
-        recruiter_name = recruiter.get("name") or ""
-        recruiter_email = recruiter.get("email") or ""
-        first_name = recruiter_name.split()[0] if recruiter_name else "there"
-
-        response["recruiter_name"] = recruiter_name or None
-
-        if not recruiter_id:
-            print(
-                f"[main] warning: top recruiter missing id for {company} on "
-                f"job {job_id}"
-            )
-            return response
-
-        try:
-            connection_note = _build_connection_note(first_name, job_title, company)
-            outreach_id = await db.queue_outreach(
-                recruiter_id=recruiter_id,
-                channel="linkedin_connection",
-                application_id=None,
-                message_text=connection_note,
-            )
-            response["linkedin_connection_queued"] = bool(outreach_id)
-        except Exception as e:
-            print(
-                f"[main] warning: failed to queue LinkedIn connection for "
-                f"{recruiter_name}: {e}"
-            )
-
-        try:
-            inmail_text = _build_inmail_message(first_name, job_title, company)
-            outreach_id = await db.queue_outreach(
-                recruiter_id=recruiter_id,
-                channel="linkedin_inmail",
-                application_id=None,
-                message_text=inmail_text,
-            )
-            response["linkedin_inmail_queued"] = bool(outreach_id)
-        except Exception as e:
-            print(
-                f"[main] warning: failed to queue LinkedIn InMail for "
-                f"{recruiter_name}: {e}"
-            )
-
-        if recruiter_email and "@" in recruiter_email:
-            response["email_attempted"] = True
-            try:
-                response["email_sent"] = await email_sender.send_recruiter_email(
-                    recruiter_id=recruiter_id,
-                    recruiter_name=recruiter_name,
-                    recruiter_email=recruiter_email,
-                    company=company,
-                    role=job_title,
-                    resume_pdf_path=resume_pdf_path,
-                    application_id=None,
-                )
-            except Exception as e:
-                print(
-                    f"[main] warning: failed to send recruiter email for "
-                    f"{recruiter_name}: {e}"
-                )
-        else:
-            print(
-                f"[main] warning: recruiter email missing for {recruiter_name} "
-                f"at {company}; skipping email"
-            )
-
-        response["outreach_queued"] = any(
-            (
-                response["linkedin_connection_queued"],
-                response["linkedin_inmail_queued"],
-                response["email_attempted"],
-            )
-        )
-    except Exception as e:
-        print(f"[main] warning: outreach trigger failed for job {job_id}: {e}")
-
-    return response
+    await db.update_job_apply_options(
+        job_id,
+        use_resume_tailor=use_resume_tailor,
+        run_recruiter_search=run_recruiter_search,
+    )
+    await db.update_job_status(job_id, "approved")
+    return {
+        "status": "ok",
+        "job_id": job_id,
+        "queued_for_apply": True,
+        "useResumeTailor": use_resume_tailor,
+        "runRecruiterSearch": run_recruiter_search,
+    }
 
 
 @app.post("/jobs/skip/{job_id}")

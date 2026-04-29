@@ -17,8 +17,6 @@ type ReferralsResponse = {
   nextCursor: string | null
 }
 
-const AGENT_URL = (process.env.NEXT_PUBLIC_AGENT_URL ?? "http://localhost:8000").replace(/\/$/, "")
-
 const DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "numeric",
@@ -49,7 +47,7 @@ export default function ReferralsPage() {
       params.set("cursor", cursor)
     }
 
-    const response = await fetch(`${AGENT_URL}/referrals?${params.toString()}`, {
+    const response = await fetch(`/api/referrals?${params.toString()}`, {
       cache: "no-store",
     })
     if (!response.ok) {

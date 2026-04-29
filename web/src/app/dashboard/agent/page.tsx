@@ -13,10 +13,10 @@ type LogEntry = {
 type AgentStatus = "running" | "idle" | "error"
 type ConnStatus  = "connected" | "connecting" | "disconnected"
 
-const WS_BASE =
-  (typeof window !== "undefined" && (window as any).__NEXT_DATA__)
-    ? undefined
-    : undefined
+type AgentConnectionConfig = {
+  wsUrl: string | null
+  error?: string
+}
 
 function nowHMS(): string {
   return new Date().toTimeString().slice(0, 8)
@@ -28,6 +28,7 @@ export default function AgentPage() {
   const [screenshot,  setScreenshot]  = useState<string | null>(null)
   const [log,         setLog]         = useState<LogEntry[]>([])
   const [lastRun, setLastRun]         = useState<{ applied: number; failed: number } | null>(null)
+  const [connectionError, setConnectionError] = useState<string | null>(null)
 
   const wsRef         = useRef<WebSocket | null>(null)
   const reconnectRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -64,39 +65,91 @@ export default function AgentPage() {
   )
 
   const connect = useCallback(() => {
-    if (reconnectRef.current) clearTimeout(reconnectRef.current)
-    if (pingRef.current)      clearInterval(pingRef.current)
+    const resolveWsBase = async (): Promise<string | null> => {
+      const res = await fetch("/api/agent/connection", { cache: "no-store" })
+      const data = await res.json().catch(() => null) as AgentConnectionConfig | null
+      if (!res.ok || !data?.wsUrl) {
+        throw new Error(data?.error ?? "Agent websocket URL is missing or invalid")
+      }
 
-    const wsUrl = process.env.NEXT_PUBLIC_AGENT_WS_URL ?? "ws://localhost:8000"
-    setConnStatus("connecting")
-
-    const ws = new WebSocket(`${wsUrl}/agent/stream`)
-    wsRef.current = ws
-
-    ws.onopen = () => {
-      setConnStatus("connected")
-      pingRef.current = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) ws.send("ping")
-      }, 30_000)
-    }
-
-    ws.onmessage = e => {
       try {
-        handleMessage(JSON.parse(e.data as string))
-      } catch {}
+        const url = new URL(data.wsUrl)
+        if (!["ws:", "wss:"].includes(url.protocol)) {
+          throw new Error("Agent websocket URL must use ws:// or wss://")
+        }
+      } catch (error) {
+        throw new Error(error instanceof Error ? error.message : "Invalid websocket URL")
+      }
+
+      return data.wsUrl
     }
 
-    ws.onclose = () => {
-      setConnStatus("disconnected")
+    const openConnection = async () => {
+      if (reconnectRef.current) clearTimeout(reconnectRef.current)
       if (pingRef.current) clearInterval(pingRef.current)
-      reconnectRef.current = setTimeout(connect, 3_000)
+
+      setConnStatus("connecting")
+      setConnectionError(null)
+
+      let wsBase: string
+      try {
+        const resolved = await resolveWsBase()
+        if (!resolved) {
+          throw new Error("Agent websocket URL is missing or invalid")
+        }
+        wsBase = resolved
+      } catch (error) {
+        setConnStatus("disconnected")
+        const message = error instanceof Error ? error.message : "Unable to resolve agent websocket URL"
+        setConnectionError(message)
+        addLog("error", message)
+        return
+      }
+
+      let ws: WebSocket
+      try {
+        ws = new WebSocket(`${wsBase}/agent/stream`)
+      } catch (error) {
+        setConnStatus("disconnected")
+        const message = error instanceof Error ? error.message : "Failed to open websocket"
+        setConnectionError(message)
+        addLog("error", message)
+        return
+      }
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        setConnStatus("connected")
+        setConnectionError(null)
+        pingRef.current = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) ws.send("ping")
+        }, 15_000)
+      }
+
+      ws.onmessage = e => {
+        try {
+          handleMessage(JSON.parse(e.data as string))
+        } catch {}
+      }
+
+      ws.onclose = () => {
+        setConnStatus("disconnected")
+        setScreenshot(null)
+        if (pingRef.current) clearInterval(pingRef.current)
+        setConnectionError("Agent websocket disconnected; retrying...")
+        reconnectRef.current = setTimeout(() => {
+          void openConnection()
+        }, 3_000)
+      }
+
+      ws.onerror = () => ws.close()
     }
 
-    ws.onerror = () => ws.close()
-  }, [handleMessage])
+    void openConnection()
+  }, [addLog, handleMessage])
 
   useEffect(() => {
-    connect()
+    void connect()
     return () => {
       if (reconnectRef.current) clearTimeout(reconnectRef.current)
       if (pingRef.current)      clearInterval(pingRef.current)
@@ -237,7 +290,9 @@ export default function AgentPage() {
                 <div className="text-center select-none">
                   <div className="text-5xl mb-4 opacity-15">◉</div>
                   <div className="text-white/30 text-sm">
-                    {connStatus === "connected"
+                    {connectionError
+                      ? connectionError
+                      : connStatus === "connected"
                       ? "Waiting for agent to start…"
                       : connStatus === "connecting"
                       ? "Connecting to agent…"

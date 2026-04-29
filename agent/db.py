@@ -6,7 +6,6 @@ Job, Application, Recruiter, and RecruiterOutreach records.
 """
 
 import os
-from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -89,6 +88,7 @@ async def insert_job(
     location: str | None = None,
     jd_text: str | None = None,
     is_top_priority: bool = False,
+    match_score: int = 50,
 ) -> str:
     """
     Insert a new Job record with status='pending'.
@@ -116,12 +116,12 @@ async def insert_job(
         """
         INSERT INTO Job
           (id, title, company, location, jobBoardUrl, source,
-           status, isTopPriority, jdText, createdAt, updatedAt)
-        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?,
+           status, isTopPriority, jdText, matchScore, createdAt, updatedAt)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?,
                 datetime('now'), datetime('now'))
         """,
         [job_id, title, company, location, job_board_url,
-         source, int(is_top_priority), jd_text],
+         source, int(is_top_priority), jd_text, match_score],
     )
     return job_id
 
@@ -129,10 +129,14 @@ async def insert_job(
 async def is_fuzzy_duplicate(title: str, company: str) -> bool:
     """Return True if a recent job from the same company has a similar title."""
     client = get_client()
-    cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
     result = await client.execute(
-        "SELECT id, title FROM Job WHERE LOWER(company) = LOWER(?) AND createdAt >= ?",
-        [company.strip(), cutoff],
+        """
+        SELECT id, title
+        FROM Job
+        WHERE LOWER(company) = LOWER(?)
+          AND createdAt >= datetime('now', '-7 days')
+        """,
+        [company.strip()],
     )
 
     title_lower = title.lower()
@@ -158,7 +162,7 @@ async def get_pending_jobs() -> list[dict]:
     result = await client.execute(
         """
         SELECT id, title, company, location, jobBoardUrl, source,
-               isTopPriority, jdText, matchScore
+               isTopPriority, useResumeTailor, runRecruiterSearch, jdText, matchScore
         FROM Job
         WHERE status = 'pending'
         ORDER BY isTopPriority DESC, createdAt ASC
@@ -176,6 +180,23 @@ async def update_job_status(job_id: str, status: str) -> None:
         "UPDATE Job SET status = ?, updatedAt = datetime('now') "
         "WHERE id = ?",
         [status, job_id],
+    )
+
+
+async def update_job_apply_options(
+    job_id: str,
+    use_resume_tailor: bool,
+    run_recruiter_search: bool,
+) -> None:
+    """Persist per-job application options before the apply agent runs."""
+    client = get_client()
+    await client.execute(
+        """
+        UPDATE Job
+        SET useResumeTailor = ?, runRecruiterSearch = ?, updatedAt = datetime('now')
+        WHERE id = ?
+        """,
+        [int(use_resume_tailor), int(run_recruiter_search), job_id],
     )
 
 
@@ -286,7 +307,7 @@ async def get_approved_jobs() -> list[dict]:
     result = await client.execute(
         """
         SELECT j.id, j.title, j.company, j.location, j.jobBoardUrl,
-               j.isTopPriority, j.jdText,
+               j.isTopPriority, j.useResumeTailor, j.runRecruiterSearch, j.jdText,
                a.resumeVersion AS resumePdfPath,
                a.coverLetter
         FROM Job j
@@ -305,7 +326,8 @@ async def get_retry_queued_jobs() -> list[dict]:
     result = await client.execute(
         """
         SELECT j.id, j.title, j.company, j.location, j.jobBoardUrl,
-               j.isTopPriority, j.jdText, j.retryCount, j.updatedAt,
+               j.isTopPriority, j.useResumeTailor, j.runRecruiterSearch,
+               j.jdText, j.retryCount, j.updatedAt,
                j.status, a.resumeVersion AS resumePdfPath, a.coverLetter
         FROM Job j
         LEFT JOIN Application a ON a.jobId = j.id
@@ -439,9 +461,9 @@ async def upsert_ats_slug(slug: str, ats_board: str, company: str) -> None:
         """
         INSERT OR IGNORE INTO AtsSlugs
           (id, slug, atsBoard, company, active, createdAt)
-        VALUES (?, ?, ?, ?, 1, ?)
+        VALUES (?, ?, ?, ?, 1, datetime('now'))
         """,
-        [str(uuid4()), slug, ats_board, company, datetime.utcnow().isoformat()],
+        [str(uuid4()), slug, ats_board, company],
     )
 
 
@@ -449,8 +471,12 @@ async def update_ats_slug_scraped(slug: str, ats_board: str) -> None:
     """Update the last scrape timestamp for one ATS slug row."""
     client = get_client()
     await client.execute(
-        "UPDATE AtsSlugs SET lastScrapedAt = ? WHERE slug = ? AND atsBoard = ?",
-        [datetime.utcnow().isoformat(), slug, ats_board],
+        """
+        UPDATE AtsSlugs
+        SET lastScrapedAt = datetime('now')
+        WHERE slug = ? AND atsBoard = ?
+        """,
+        [slug, ats_board],
     )
 
 

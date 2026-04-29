@@ -12,7 +12,7 @@ export async function POST(
       data: { status: "approved" },
     })
     return NextResponse.json({ success: true })
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to approve outreach" },
       { status: 500 }
